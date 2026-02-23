@@ -39,6 +39,7 @@ JIRA_TICKET_FIELDS: Final[str] = (
 FIREFLIES_API_URL: Final[str] = "https://api.fireflies.ai/graphql"
 FIREFLIES_MAX_TRANSCRIPTS: Final[int] = 10
 FIREFLIES_SEARCH_LIMIT: Final[int] = 5
+FIREFLIES_CONTEXT_WINDOW: Final[int] = 3  # Sentences before/after a match to include
 
 # =============================================================================
 # LOCAL DOCS

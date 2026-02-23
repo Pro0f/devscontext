@@ -14,10 +14,10 @@ from typing import TYPE_CHECKING
 from devscontext.adapters.base import Adapter
 from devscontext.constants import ADAPTER_LOCAL_DOCS, SOURCE_TYPE_DOCUMENTATION
 from devscontext.logging import get_logger
-from devscontext.models import ContextData
+from devscontext.models import ContextData, DocsContext, DocSection
 
 if TYPE_CHECKING:
-    from devscontext.config import LocalDocsConfig
+    from devscontext.models import DocsConfig
 
 logger = get_logger(__name__)
 
@@ -33,7 +33,7 @@ class LocalDocsAdapter(Adapter):
         source_type: Always "documentation".
     """
 
-    def __init__(self, config: LocalDocsConfig) -> None:
+    def __init__(self, config: DocsConfig) -> None:
         """Initialize the local docs adapter.
 
         Args:
@@ -148,6 +148,72 @@ Authentication errors should return:
         )
 
         return results
+
+    async def get_docs_context(self, task_id: str) -> DocsContext:
+        """Get documentation context for a task.
+
+        Searches configured documentation directories for content relevant
+        to the task.
+
+        Args:
+            task_id: The task identifier to search for in docs.
+
+        Returns:
+            DocsContext with relevant documentation sections.
+        """
+        if not self._config.enabled:
+            logger.debug("Local docs adapter is disabled")
+            return DocsContext()
+
+        # TODO: Implement real file scanning and search
+        # For now, return stub data to demonstrate the interface
+        logger.info(
+            "Fetching docs context (stub)",
+            extra={"task_id": task_id, "paths": self._config.paths},
+        )
+
+        sections: list[DocSection] = [
+            DocSection(
+                file_path="docs/architecture/payments-service.md",
+                section_title="Payments Service Architecture",
+                content="""## Authentication
+
+The payments service uses JWT tokens for authentication. All requests must include
+a valid Bearer token in the Authorization header.
+
+### Token Validation
+
+Tokens are validated against the auth service using the `/auth/validate` endpoint.
+The service caches validation results for 5 minutes to reduce load.
+
+### Required Scopes
+
+- `payments:read` - View payment history
+- `payments:write` - Create new payments
+- `payments:admin` - Manage payment methods""",
+                doc_type="architecture",
+            ),
+            DocSection(
+                file_path="docs/standards/typescript.md",
+                section_title="TypeScript Coding Standards - Authentication",
+                content="""## Authentication Patterns
+
+When implementing authentication:
+
+1. Always use the `AuthMiddleware` from `@company/auth`
+2. Never store tokens in localStorage - use httpOnly cookies
+3. Implement token refresh logic in the API client
+
+```typescript
+import { AuthMiddleware } from '@company/auth';
+
+app.use('/api', AuthMiddleware.verify());
+```""",
+                doc_type="standards",
+            ),
+        ]
+
+        return DocsContext(sections=sections)
 
     async def health_check(self) -> bool:
         """Check if local docs paths are accessible.

@@ -5,346 +5,224 @@ All models use Pydantic BaseModel with Field() descriptions for
 documentation and validation.
 
 Models are organized by domain:
-- Context models (ContextData, TaskContext)
-- Jira models (JiraUser, JiraTicket, etc.)
-- Fireflies models (Transcript, TranscriptExcerpt, etc.)
-- Config models (moved to config.py for separation)
+- Config models (JiraConfig, FirefliesConfig, DocsConfig, etc.)
+- Jira data models (JiraTicket, JiraComment, LinkedIssue, JiraContext)
+- Meeting data models (MeetingExcerpt, MeetingContext)
+- Documentation models (DocSection, DocsContext)
+- Result models (TaskContext, ContextData)
+
+All datetime fields use timezone-aware UTC datetimes.
 """
 
-from typing import Any
+from __future__ import annotations
+
+from datetime import datetime  # noqa: TC003 - Required at runtime for Pydantic
+from typing import Any, Literal
 
 from pydantic import BaseModel, Field
 
 # =============================================================================
-# CONTEXT MODELS
+# CONFIG MODELS
 # =============================================================================
 
 
-class ContextData(BaseModel):
-    """Structured context data from an adapter.
+class JiraConfig(BaseModel):
+    """Jira adapter configuration."""
 
-    This is the standard format that all adapters return. It represents
-    a single piece of context (a ticket, a meeting excerpt, a doc section).
-    """
-
-    source: str = Field(
-        ...,
-        description="Source identifier (e.g., 'jira:PROJ-123', 'fireflies:meeting-id')",
-    )
-    source_type: str = Field(
-        ...,
-        description="Type of source (e.g., 'issue_tracker', 'meeting', 'documentation')",
-    )
-    title: str = Field(
-        ...,
-        description="Human-readable title for this context item",
-    )
-    content: str = Field(
-        ...,
-        description="The actual content/text of this context item",
-    )
-    metadata: dict[str, Any] = Field(
-        default_factory=dict,
-        description="Additional metadata specific to the source type",
-    )
-    relevance_score: float = Field(
-        default=1.0,
-        ge=0.0,
-        le=1.0,
-        description="Relevance score from 0.0 to 1.0 (1.0 = most relevant)",
-    )
+    base_url: str = Field(default="", description="Jira instance URL")
+    email: str = Field(default="", description="Jira authentication email")
+    api_token: str = Field(default="", description="Jira API token (from env)")
+    project: str = Field(default="", description="Default Jira project key")
+    enabled: bool = Field(default=False, description="Whether adapter is enabled")
 
 
-class TaskContextResult(BaseModel):
-    """Result of fetching context for a task.
+class FirefliesConfig(BaseModel):
+    """Fireflies.ai adapter configuration."""
 
-    Returned by ContextOrchestrator.get_task_context().
-    """
+    api_key: str = Field(default="", description="Fireflies.ai API key (from env)")
+    enabled: bool = Field(default=False, description="Whether adapter is enabled")
 
-    task_id: str = Field(
-        ...,
-        description="The task identifier that was queried",
+
+class DocsConfig(BaseModel):
+    """Local documentation adapter configuration."""
+
+    paths: list[str] = Field(
+        default_factory=lambda: ["./docs/"],
+        description="Paths to documentation directories",
     )
-    context: str = Field(
-        ...,
-        description="Formatted context string ready for LLM consumption",
+    standards_path: str | None = Field(default=None, description="Path to coding standards docs")
+    architecture_path: str | None = Field(default=None, description="Path to architecture docs")
+    enabled: bool = Field(default=True, description="Whether adapter is enabled")
+
+
+class SynthesisConfig(BaseModel):
+    """LLM synthesis configuration."""
+
+    provider: Literal["anthropic", "openai", "ollama"] = Field(
+        default="anthropic",
+        description="LLM provider for synthesis",
     )
-    sources: list[str] = Field(
-        default_factory=list,
-        description="List of source identifiers that contributed to this context",
-    )
-    item_count: int = Field(
-        default=0,
-        ge=0,
-        description="Number of context items found",
-    )
-    cached: bool = Field(
-        default=False,
-        description="Whether this result was served from cache",
+    model: str = Field(default="claude-haiku-4-5", description="Model name/ID to use")
+    api_key: str | None = Field(default=None, description="API key for the provider (from env)")
+    max_output_tokens: int = Field(
+        default=3000,
+        ge=100,
+        le=10000,
+        description="Maximum tokens in synthesized output",
     )
 
 
-class SearchContextResult(BaseModel):
-    """Result of searching across all sources.
+class CacheConfig(BaseModel):
+    """Cache configuration."""
 
-    Returned by ContextOrchestrator.search_context().
-    """
+    enabled: bool = Field(default=True, description="Whether caching is enabled")
+    ttl_minutes: int = Field(default=15, ge=1, le=1440, description="Cache entry TTL in minutes")
+    max_size: int = Field(default=100, ge=1, description="Maximum cache entries")
 
-    query: str = Field(
-        ...,
-        description="The search query that was executed",
-    )
-    results: str = Field(
-        ...,
-        description="Formatted search results",
-    )
-    sources: list[str] = Field(
-        default_factory=list,
-        description="List of sources that were searched",
-    )
-    result_count: int = Field(
-        default=0,
-        ge=0,
-        description="Number of results found",
-    )
+    @property
+    def ttl_seconds(self) -> int:
+        """Return TTL in seconds for compatibility."""
+        return self.ttl_minutes * 60
 
 
-class StandardsResult(BaseModel):
-    """Result of fetching coding standards.
+class SourcesConfig(BaseModel):
+    """Configuration for all data sources."""
 
-    Returned by ContextOrchestrator.get_standards().
-    """
+    jira: JiraConfig = Field(default_factory=JiraConfig)
+    fireflies: FirefliesConfig = Field(default_factory=FirefliesConfig)
+    docs: DocsConfig = Field(default_factory=DocsConfig)
 
-    area: str | None = Field(
-        default=None,
-        description="The area filter that was applied (if any)",
-    )
-    content: str = Field(
-        ...,
-        description="The standards content",
-    )
+
+class DevsContextConfig(BaseModel):
+    """Root configuration for DevsContext."""
+
+    sources: SourcesConfig = Field(default_factory=SourcesConfig)
+    synthesis: SynthesisConfig = Field(default_factory=SynthesisConfig)
+    cache: CacheConfig = Field(default_factory=CacheConfig)
 
 
 # =============================================================================
-# JIRA MODELS
+# JIRA DATA MODELS
 # =============================================================================
-
-
-class JiraUser(BaseModel):
-    """Jira user information."""
-
-    display_name: str = Field(
-        default="Unknown",
-        description="User's display name",
-    )
-    email: str | None = Field(
-        default=None,
-        description="User's email address (may be hidden due to privacy settings)",
-    )
-
-
-class JiraComment(BaseModel):
-    """A comment on a Jira ticket."""
-
-    id: str = Field(
-        ...,
-        description="Unique comment ID",
-    )
-    author: JiraUser = Field(
-        ...,
-        description="User who wrote the comment",
-    )
-    body: str = Field(
-        ...,
-        description="Comment text content",
-    )
-    created: str = Field(
-        ...,
-        description="ISO timestamp when the comment was created",
-    )
-
-
-class JiraLinkedIssue(BaseModel):
-    """A linked issue reference from a Jira ticket."""
-
-    key: str = Field(
-        ...,
-        description="Issue key (e.g., 'PROJ-456')",
-    )
-    summary: str = Field(
-        ...,
-        description="Issue summary/title",
-    )
-    status: str = Field(
-        ...,
-        description="Current status of the linked issue",
-    )
-    link_type: str = Field(
-        ...,
-        description="Type of link (e.g., 'blocks', 'is blocked by', 'relates to')",
-    )
 
 
 class JiraTicket(BaseModel):
     """A Jira ticket with its core fields."""
 
-    key: str = Field(
+    ticket_id: str = Field(..., description="Issue key (e.g., 'PROJ-123')")
+    title: str = Field(..., description="Issue summary/title")
+    description: str | None = Field(default=None, description="Issue description text")
+    status: str = Field(..., description="Current status (e.g., 'In Progress')")
+    assignee: str | None = Field(default=None, description="Assigned user's display name")
+    labels: list[str] = Field(default_factory=list, description="Labels on this issue")
+    components: list[str] = Field(default_factory=list, description="Components")
+    acceptance_criteria: str | None = Field(default=None, description="Acceptance criteria")
+    story_points: float | None = Field(default=None, ge=0, description="Story points estimate")
+    sprint: str | None = Field(default=None, description="Current sprint name")
+    created: datetime = Field(..., description="When issue was created (UTC)")
+    updated: datetime = Field(..., description="When issue was last updated (UTC)")
+
+
+class JiraComment(BaseModel):
+    """A comment on a Jira ticket."""
+
+    author: str = Field(..., description="Comment author's display name")
+    body: str = Field(..., description="Comment text content")
+    created: datetime = Field(..., description="When comment was created (UTC)")
+
+
+class LinkedIssue(BaseModel):
+    """A linked issue reference from a Jira ticket."""
+
+    ticket_id: str = Field(..., description="Issue key (e.g., 'PROJ-456')")
+    title: str = Field(..., description="Issue summary/title")
+    status: str = Field(..., description="Current status of linked issue")
+    link_type: str = Field(
         ...,
-        description="Issue key (e.g., 'PROJ-123')",
-    )
-    summary: str = Field(
-        ...,
-        description="Issue summary/title",
-    )
-    description: str | None = Field(
-        default=None,
-        description="Issue description (may be in ADF format, converted to plain text)",
-    )
-    status: str = Field(
-        ...,
-        description="Current status (e.g., 'To Do', 'In Progress', 'Done')",
-    )
-    priority: str | None = Field(
-        default=None,
-        description="Priority level (e.g., 'High', 'Medium', 'Low')",
-    )
-    assignee: JiraUser | None = Field(
-        default=None,
-        description="User assigned to this issue",
-    )
-    reporter: JiraUser | None = Field(
-        default=None,
-        description="User who reported this issue",
-    )
-    labels: list[str] = Field(
-        default_factory=list,
-        description="Labels attached to this issue",
-    )
-    issue_type: str = Field(
-        default="Task",
-        description="Issue type (e.g., 'Story', 'Bug', 'Task', 'Epic')",
-    )
-    created: str | None = Field(
-        default=None,
-        description="ISO timestamp when the issue was created",
-    )
-    updated: str | None = Field(
-        default=None,
-        description="ISO timestamp when the issue was last updated",
+        description="Link type (e.g., 'blocks', 'is blocked by', 'relates to')",
     )
 
 
-class JiraTicketContext(BaseModel):
-    """Full Jira ticket context including comments and linked issues.
+class JiraContext(BaseModel):
+    """Complete Jira context for a ticket."""
 
-    This is the complete context package for a single Jira ticket,
-    assembled from multiple API calls.
-    """
-
-    ticket: JiraTicket = Field(
-        ...,
-        description="The main ticket details",
-    )
-    comments: list[JiraComment] = Field(
-        default_factory=list,
-        description="Comments on the ticket (most recent first)",
-    )
-    linked_issues: list[JiraLinkedIssue] = Field(
-        default_factory=list,
-        description="Issues linked to this ticket",
-    )
+    ticket: JiraTicket = Field(..., description="The main ticket details")
+    comments: list[JiraComment] = Field(default_factory=list, description="Comments")
+    linked_issues: list[LinkedIssue] = Field(default_factory=list, description="Linked issues")
 
 
 # =============================================================================
-# FIREFLIES MODELS
+# MEETING DATA MODELS
 # =============================================================================
 
 
-class TranscriptSpeaker(BaseModel):
-    """A speaker in a Fireflies transcript."""
+class MeetingExcerpt(BaseModel):
+    """Relevant excerpt from a meeting transcript."""
 
-    name: str = Field(
-        ...,
-        description="Speaker's name as identified by Fireflies",
-    )
-
-
-class TranscriptExcerpt(BaseModel):
-    """An excerpt from a Fireflies transcript relevant to a search."""
-
-    text: str = Field(
-        ...,
-        description="The excerpt text",
-    )
-    speaker: str | None = Field(
-        default=None,
-        description="Speaker name if identified",
-    )
-    timestamp: str | None = Field(
-        default=None,
-        description="Timestamp within the meeting",
-    )
+    meeting_title: str = Field(..., description="Title of the meeting")
+    meeting_date: datetime = Field(..., description="When the meeting occurred (UTC)")
+    participants: list[str] = Field(default_factory=list, description="Participant names")
+    excerpt: str = Field(..., description="Relevant portion of transcript")
+    action_items: list[str] = Field(default_factory=list, description="Action items extracted")
+    decisions: list[str] = Field(default_factory=list, description="Decisions made")
 
 
-class FirefliesTranscript(BaseModel):
-    """A Fireflies meeting transcript."""
+class MeetingContext(BaseModel):
+    """All meeting context found for a task."""
 
-    id: str = Field(
-        ...,
-        description="Unique transcript ID",
-    )
-    title: str = Field(
-        ...,
-        description="Meeting title",
-    )
-    date: str = Field(
-        ...,
-        description="Meeting date (ISO format)",
-    )
-    duration_minutes: int | None = Field(
-        default=None,
-        ge=0,
-        description="Meeting duration in minutes",
-    )
-    participants: list[str] = Field(
-        default_factory=list,
-        description="List of participant names",
-    )
-    summary: str | None = Field(
-        default=None,
-        description="AI-generated meeting summary",
-    )
-    action_items: list[str] = Field(
-        default_factory=list,
-        description="Action items extracted from the meeting",
-    )
-    excerpts: list[TranscriptExcerpt] = Field(
-        default_factory=list,
-        description="Relevant excerpts from the transcript",
-    )
+    meetings: list[MeetingExcerpt] = Field(default_factory=list, description="Meeting excerpts")
 
 
 # =============================================================================
-# LOCAL DOCS MODELS
+# DOCUMENTATION MODELS
 # =============================================================================
 
 
-class LocalDocument(BaseModel):
-    """A local documentation file."""
+class DocSection(BaseModel):
+    """A relevant section from a local document."""
 
-    path: str = Field(
-        ...,
-        description="Relative path to the document",
+    file_path: str = Field(..., description="Path to the document file")
+    section_title: str | None = Field(default=None, description="Section title if identifiable")
+    content: str = Field(..., description="The section content")
+    doc_type: Literal["architecture", "standards", "adr", "other"] = Field(
+        default="other",
+        description="Type of documentation",
     )
-    title: str = Field(
-        ...,
-        description="Document title (from filename or H1)",
-    )
-    content: str = Field(
-        ...,
-        description="Document content",
-    )
-    last_modified: str | None = Field(
-        default=None,
-        description="ISO timestamp of last modification",
+
+
+class DocsContext(BaseModel):
+    """All relevant documentation found for a task."""
+
+    sections: list[DocSection] = Field(default_factory=list, description="Document sections")
+
+
+# =============================================================================
+# RESULT MODELS
+# =============================================================================
+
+
+class TaskContext(BaseModel):
+    """The final synthesized context returned to the AI agent."""
+
+    task_id: str = Field(..., description="The task identifier that was queried")
+    synthesized: str = Field(..., description="LLM-generated structured markdown synthesis")
+    sources_used: list[str] = Field(default_factory=list, description="Sources that contributed")
+    fetch_duration_ms: int = Field(..., ge=0, description="How long the fetch took (ms)")
+    synthesized_at: datetime = Field(..., description="When context was synthesized (UTC)")
+    cached: bool = Field(default=False, description="Whether served from cache")
+
+
+class ContextData(BaseModel):
+    """Structured context data from an adapter."""
+
+    source: str = Field(..., description="Source identifier (e.g., 'jira:PROJ-123')")
+    source_type: str = Field(..., description="Type of source (e.g., 'issue_tracker')")
+    title: str = Field(..., description="Human-readable title for this context item")
+    content: str = Field(..., description="The actual content/text of this context item")
+    metadata: dict[str, Any] = Field(default_factory=dict, description="Additional metadata")
+    relevance_score: float = Field(
+        default=1.0,
+        ge=0.0,
+        le=1.0,
+        description="Relevance score from 0.0 to 1.0",
     )

@@ -43,9 +43,10 @@ SAMPLE_TICKET_RESPONSE = {
         "assignee": {"displayName": "Test User", "emailAddress": "test@example.com"},
         "reporter": {"displayName": "Reporter User", "emailAddress": "reporter@example.com"},
         "labels": ["test", "example"],
+        "components": [{"name": "Backend"}],
         "issuetype": {"name": "Story"},
-        "created": "2024-01-15T10:00:00.000Z",
-        "updated": "2024-01-16T10:00:00.000Z",
+        "created": "2024-01-15T10:00:00.000+0000",
+        "updated": "2024-01-16T10:00:00.000+0000",
     },
 }
 
@@ -60,7 +61,7 @@ SAMPLE_COMMENTS_RESPONSE = {
                     {"type": "paragraph", "content": [{"type": "text", "text": "A test comment"}]}
                 ],
             },
-            "created": "2024-01-15T11:00:00.000Z",
+            "created": "2024-01-15T11:00:00.000+0000",
         }
     ]
 }
@@ -213,10 +214,10 @@ class TestJiraAdapter:
         ticket = await jira_adapter.get_ticket("TEST-123")
 
         assert ticket is not None
-        assert ticket.key == "TEST-123"
-        assert ticket.summary == "Test ticket summary"
+        assert ticket.ticket_id == "TEST-123"
+        assert ticket.title == "Test ticket summary"
         assert ticket.status == "In Progress"
-        assert ticket.priority == "High"
+        assert ticket.assignee == "Test User"
 
     async def test_get_comments(self, jira_adapter: JiraAdapter, httpx_mock: HTTPXMock) -> None:
         """Test fetching comments."""
@@ -228,8 +229,7 @@ class TestJiraAdapter:
         comments = await jira_adapter.get_comments("TEST-123")
 
         assert len(comments) == 1
-        assert comments[0].id == "10001"
-        assert comments[0].author.display_name == "Commenter"
+        assert comments[0].author == "Commenter"
         assert "test comment" in comments[0].body
 
     async def test_get_linked_issues(
@@ -244,7 +244,7 @@ class TestJiraAdapter:
         linked = await jira_adapter.get_linked_issues("TEST-123")
 
         assert len(linked) == 1
-        assert linked[0].key == "TEST-456"
-        assert linked[0].summary == "Linked issue"
+        assert linked[0].ticket_id == "TEST-456"
+        assert linked[0].title == "Linked issue"
         assert linked[0].status == "Done"
         assert linked[0].link_type == "blocks"

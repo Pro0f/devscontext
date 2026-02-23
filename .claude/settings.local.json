@@ -1,7 +1,11 @@
 {
   "permissions": {
     "allow": [
-      "Bash(mkdir:*)"
+      "Bash(mkdir:*)",
+      "Bash(ruff check:*)",
+      "Bash(pytest:*)",
+      "Bash(ruff format:*)",
+      "Bash(python3 -m pytest:*)"
     ]
   }
 }
