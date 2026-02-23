@@ -21,9 +21,7 @@ def orchestrator(config: Config) -> ContextOrchestrator:
 class TestContextOrchestrator:
     """Tests for ContextOrchestrator."""
 
-    async def test_get_task_context_returns_dict(
-        self, orchestrator: ContextOrchestrator
-    ) -> None:
+    async def test_get_task_context_returns_dict(self, orchestrator: ContextOrchestrator) -> None:
         """Test that get_task_context returns a dict with expected keys."""
         result = await orchestrator.get_task_context("TEST-123")
 
@@ -41,9 +39,7 @@ class TestContextOrchestrator:
 
         assert result["task_id"] == "PROJ-456"
 
-    async def test_health_check_returns_status(
-        self, orchestrator: ContextOrchestrator
-    ) -> None:
+    async def test_health_check_returns_status(self, orchestrator: ContextOrchestrator) -> None:
         """Test that health_check returns expected structure."""
         result = await orchestrator.health_check()
 
@@ -52,9 +48,7 @@ class TestContextOrchestrator:
         assert "adapters" in result
         assert isinstance(result["healthy"], bool)
 
-    async def test_cache_invalidation(
-        self, orchestrator: ContextOrchestrator
-    ) -> None:
+    async def test_cache_invalidation(self, orchestrator: ContextOrchestrator) -> None:
         """Test cache invalidation."""
         # Get context (should cache)
         await orchestrator.get_task_context("CACHE-TEST")
@@ -66,9 +60,7 @@ class TestContextOrchestrator:
         result = await orchestrator.get_task_context("CACHE-TEST")
         assert result["task_id"] == "CACHE-TEST"
 
-    async def test_cache_clear_all(
-        self, orchestrator: ContextOrchestrator
-    ) -> None:
+    async def test_cache_clear_all(self, orchestrator: ContextOrchestrator) -> None:
         """Test clearing entire cache."""
         await orchestrator.get_task_context("CACHE-1")
         await orchestrator.get_task_context("CACHE-2")

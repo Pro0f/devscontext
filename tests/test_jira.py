@@ -203,9 +203,7 @@ class TestJiraAdapter:
 
         assert result is True  # Disabled adapters are "healthy"
 
-    async def test_get_ticket(
-        self, jira_adapter: JiraAdapter, httpx_mock: HTTPXMock
-    ) -> None:
+    async def test_get_ticket(self, jira_adapter: JiraAdapter, httpx_mock: HTTPXMock) -> None:
         """Test fetching a single ticket."""
         httpx_mock.add_response(
             url="https://test.atlassian.net/rest/api/3/issue/TEST-123?fields=summary%2Cdescription%2Cstatus%2Cpriority%2Cassignee%2Creporter%2Clabels%2Cissuetype%2Ccreated%2Cupdated",
@@ -220,9 +218,7 @@ class TestJiraAdapter:
         assert ticket.status == "In Progress"
         assert ticket.priority == "High"
 
-    async def test_get_comments(
-        self, jira_adapter: JiraAdapter, httpx_mock: HTTPXMock
-    ) -> None:
+    async def test_get_comments(self, jira_adapter: JiraAdapter, httpx_mock: HTTPXMock) -> None:
         """Test fetching comments."""
         httpx_mock.add_response(
             url="https://test.atlassian.net/rest/api/3/issue/TEST-123/comment?maxResults=50&orderBy=-created",

@@ -1,41 +1,77 @@
-"""Fireflies adapter for fetching meeting transcript context."""
+"""Fireflies adapter for fetching meeting transcript context.
 
-from devscontext.adapters.base import Adapter, ContextData
-from devscontext.config import FirefliesConfig
+This adapter connects to the Fireflies.ai GraphQL API to fetch meeting
+transcripts and search for relevant discussions related to a task.
+
+Note: This is currently a stub implementation. The real implementation
+will be added in Day 2.
+"""
+
+from __future__ import annotations
+
+from typing import TYPE_CHECKING
+
+from devscontext.adapters.base import Adapter
+from devscontext.constants import ADAPTER_FIREFLIES, SOURCE_TYPE_MEETING
+from devscontext.logging import get_logger
+from devscontext.models import ContextData
+
+if TYPE_CHECKING:
+    from devscontext.config import FirefliesConfig
+
+logger = get_logger(__name__)
 
 
 class FirefliesAdapter(Adapter):
-    """Adapter for fetching context from Fireflies meeting transcripts."""
+    """Adapter for fetching context from Fireflies meeting transcripts.
+
+    This adapter connects to Fireflies.ai to search for meeting transcripts
+    that mention a specific task ID or keywords.
+
+    Attributes:
+        name: Always "fireflies".
+        source_type: Always "meeting".
+    """
 
     def __init__(self, config: FirefliesConfig) -> None:
         """Initialize the Fireflies adapter.
 
         Args:
-            config: Fireflies configuration.
+            config: Fireflies configuration with api_key.
         """
         self._config = config
 
     @property
     def name(self) -> str:
-        return "fireflies"
+        """Return the adapter name."""
+        return ADAPTER_FIREFLIES
 
     @property
     def source_type(self) -> str:
-        return "meeting"
+        """Return the source type."""
+        return SOURCE_TYPE_MEETING
 
     async def fetch_context(self, task_id: str) -> list[ContextData]:
         """Fetch context from Fireflies meeting transcripts.
+
+        Searches for meeting transcripts that mention the given task ID.
 
         Args:
             task_id: The task identifier to search for in transcripts.
 
         Returns:
-            List of relevant meeting excerpts.
+            List of relevant meeting excerpts, empty if not configured or no matches.
         """
-        # TODO: Implement real Fireflies API calls
-        # For now, return hardcoded stub data
         if not self._config.enabled:
+            logger.debug("Fireflies adapter is disabled")
             return []
+
+        # TODO: Implement real Fireflies API calls in Day 2
+        # For now, return stub data to demonstrate the interface
+        logger.info(
+            "Fetching Fireflies context (stub)",
+            extra={"task_id": task_id},
+        )
 
         return [
             ContextData(
@@ -44,11 +80,14 @@ class FirefliesAdapter(Adapter):
                 title="Sprint Planning - Auth Implementation Discussion",
                 content="""## Meeting Notes (relevant excerpt)
 
-**Sarah (Tech Lead):** For the auth flow, we decided to use Google OAuth as the primary provider. We might add GitHub later but let's start simple.
+**Sarah (Tech Lead):** For the auth flow, we decided to use Google OAuth as the primary provider.
+We might add GitHub later but let's start simple.
 
-**Mike (Security):** Make sure we're using PKCE for the OAuth flow. Also, the JWT secret should come from the vault, not environment variables.
+**Mike (Security):** Make sure we're using PKCE for the OAuth flow.
+Also, the JWT secret should come from the vault, not environment variables.
 
-**Sarah:** Good point. And remember, the payments service needs to validate tokens from the auth service, so we need to expose a token validation endpoint.
+**Sarah:** Good point. And remember, the payments service needs to validate tokens
+from the auth service, so we need to expose a token validation endpoint.
 
 **Action Items:**
 - Implement PKCE flow for OAuth
@@ -65,9 +104,20 @@ class FirefliesAdapter(Adapter):
         ]
 
     async def health_check(self) -> bool:
-        """Check if Fireflies is configured and accessible."""
+        """Check if Fireflies is configured and accessible.
+
+        Returns:
+            True if healthy or disabled, False if there's an issue.
+        """
         if not self._config.enabled:
             return True
 
         # TODO: Actually ping Fireflies API
-        return bool(self._config.api_key)
+        healthy = bool(self._config.api_key)
+
+        if healthy:
+            logger.info("Fireflies health check passed (stub)")
+        else:
+            logger.warning("Fireflies adapter missing API key")
+
+        return healthy

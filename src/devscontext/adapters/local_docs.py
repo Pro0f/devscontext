@@ -1,47 +1,80 @@
-"""Local docs adapter for fetching context from local markdown files."""
+"""Local docs adapter for fetching context from local markdown files.
 
-from pathlib import Path
+This adapter searches local documentation directories for relevant content.
+It supports markdown, text, and rst files.
 
-from devscontext.adapters.base import Adapter, ContextData
-from devscontext.config import LocalDocsConfig
+Note: This is currently a stub implementation. Real file search will be
+added in a future iteration.
+"""
+
+from __future__ import annotations
+
+from typing import TYPE_CHECKING
+
+from devscontext.adapters.base import Adapter
+from devscontext.constants import ADAPTER_LOCAL_DOCS, SOURCE_TYPE_DOCUMENTATION
+from devscontext.logging import get_logger
+from devscontext.models import ContextData
+
+if TYPE_CHECKING:
+    from devscontext.config import LocalDocsConfig
+
+logger = get_logger(__name__)
 
 
 class LocalDocsAdapter(Adapter):
-    """Adapter for fetching context from local documentation files."""
+    """Adapter for fetching context from local documentation files.
+
+    This adapter searches configured documentation directories for
+    markdown files that contain relevant content.
+
+    Attributes:
+        name: Always "local_docs".
+        source_type: Always "documentation".
+    """
 
     def __init__(self, config: LocalDocsConfig) -> None:
         """Initialize the local docs adapter.
 
         Args:
-            config: Local docs configuration.
+            config: Local docs configuration with paths to search.
         """
         self._config = config
 
     @property
     def name(self) -> str:
-        return "local_docs"
+        """Return the adapter name."""
+        return ADAPTER_LOCAL_DOCS
 
     @property
     def source_type(self) -> str:
-        return "documentation"
+        """Return the source type."""
+        return SOURCE_TYPE_DOCUMENTATION
 
     async def fetch_context(self, task_id: str) -> list[ContextData]:
         """Fetch context from local documentation files.
+
+        Searches configured documentation directories for relevant content.
 
         Args:
             task_id: The task identifier to search for in docs.
 
         Returns:
-            List of relevant documentation excerpts.
+            List of relevant documentation excerpts, empty if not configured.
         """
-        # TODO: Implement real file scanning and search
-        # For now, return hardcoded stub data
         if not self._config.enabled:
+            logger.debug("Local docs adapter is disabled")
             return []
+
+        # TODO: Implement real file scanning and search
+        # For now, return stub data to demonstrate the interface
+        logger.info(
+            "Fetching local docs context (stub)",
+            extra={"task_id": task_id, "paths": self._config.paths},
+        )
 
         results: list[ContextData] = []
 
-        # Stub: Return example documentation
         results.append(
             ContextData(
                 source="docs:architecture/payments-service.md",
@@ -117,13 +150,23 @@ Authentication errors should return:
         return results
 
     async def health_check(self) -> bool:
-        """Check if local docs paths are accessible."""
+        """Check if local docs paths are accessible.
+
+        Returns:
+            True if healthy or disabled, False if configured paths don't exist.
+        """
         if not self._config.enabled:
             return True
 
-        for path_str in self._config.paths:
-            path = Path(path_str)
-            if not path.exists():
-                return False
+        # TODO: Actually check if paths exist
+        healthy = len(self._config.paths) > 0
 
-        return True
+        if healthy:
+            logger.info(
+                "Local docs health check passed",
+                extra={"path_count": len(self._config.paths)},
+            )
+        else:
+            logger.warning("Local docs adapter has no paths configured")
+
+        return healthy

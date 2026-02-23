@@ -1,6 +1,18 @@
-"""Context synthesis - combines and ranks context from multiple sources."""
+"""Context synthesis - combines and ranks context from multiple sources.
 
-from devscontext.adapters.base import ContextData
+This module provides functions for synthesizing context from multiple
+adapters into a coherent, ranked output suitable for LLM consumption.
+
+In the future, this module will include LLM-based synthesis to intelligently
+combine and summarize context from different sources.
+"""
+
+from __future__ import annotations
+
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from devscontext.models import ContextData
 
 
 def synthesize_context(
@@ -9,6 +21,13 @@ def synthesize_context(
 ) -> list[ContextData]:
     """Synthesize and rank context from multiple sources.
 
+    Currently implements basic sorting by relevance score. Future versions
+    will include:
+        - Deduplication of similar content
+        - LLM-based relevance scoring
+        - Cross-source synthesis
+        - Key information extraction
+
     Args:
         context_items: Raw context items from all adapters.
         max_items: Maximum number of items to return.
@@ -16,13 +35,7 @@ def synthesize_context(
     Returns:
         Sorted and filtered context items.
     """
-    # TODO: Implement intelligent synthesis
-    # - Deduplicate similar content
-    # - Rank by relevance
-    # - Consider recency
-    # - Extract key information
-
-    # For now, just sort by relevance score and limit
+    # Sort by relevance score (highest first)
     sorted_items = sorted(
         context_items,
         key=lambda x: x.relevance_score,
@@ -35,11 +48,14 @@ def synthesize_context(
 def format_context_for_llm(context_items: list[ContextData]) -> str:
     """Format context items into a string suitable for LLM consumption.
 
+    Creates a markdown-formatted string with each context item as a section,
+    separated by horizontal rules.
+
     Args:
         context_items: Context items to format.
 
     Returns:
-        Formatted context string.
+        Formatted context string, or a message if no context found.
     """
     if not context_items:
         return "No context found for this task."
