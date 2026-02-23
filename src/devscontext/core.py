@@ -26,8 +26,8 @@ class ContextOrchestrator:
         """
         self._config = config
         self._cache = ContextCache(
-            maxsize=config.cache.max_size,
             ttl=config.cache.ttl_seconds,
+            max_size=config.cache.max_size,
         )
         self._adapters: list[Adapter] = self._initialize_adapters()
 
@@ -112,6 +112,73 @@ class ContextOrchestrator:
         return {
             "healthy": all(results.values()),
             "adapters": results,
+        }
+
+    async def search_context(self, query: str) -> dict[str, Any]:
+        """Search across all sources by keyword.
+
+        Args:
+            query: The search query.
+
+        Returns:
+            Dictionary containing search results and metadata.
+        """
+        # TODO: Implement real search across adapters
+        # For now, return stub data
+        sources = [adapter.name for adapter in self._adapters]
+
+        results = f"""## Search Results
+
+No real search implemented yet. Query: "{query}"
+
+This will search across:
+- Jira tickets (title, description, comments)
+- Meeting transcripts (full text search)
+- Local documentation (keyword matching)
+"""
+
+        return {
+            "query": query,
+            "results": results,
+            "sources": sources if sources else ["none configured"],
+            "result_count": 0,
+        }
+
+    async def get_standards(self, area: str | None = None) -> dict[str, Any]:
+        """Get coding standards from local documentation.
+
+        Args:
+            area: Optional area to filter (e.g., 'typescript', 'testing').
+
+        Returns:
+            Dictionary containing standards content.
+        """
+        # TODO: Implement real standards fetching from local_docs adapter
+        # For now, return stub data
+        area_filter = f" for {area}" if area else ""
+
+        content = f"""## Coding Standards{area_filter}
+
+No standards documents configured yet.
+
+To add standards:
+1. Create markdown files in your docs directory
+2. Configure `local_docs.paths` in .devscontext.yaml
+3. Name files like `standards-typescript.md`, `standards-testing.md`, etc.
+
+Example structure:
+```
+docs/
+  standards/
+    typescript.md
+    testing.md
+    api-design.md
+```
+"""
+
+        return {
+            "area": area,
+            "content": content,
         }
 
     def invalidate_cache(self, task_id: str | None = None) -> None:

@@ -1,6 +1,7 @@
 """MCP server for DevsContext."""
 
 import asyncio
+import json
 
 from mcp.server import Server
 from mcp.server.stdio import stdio_server
@@ -32,21 +33,16 @@ async def list_tools() -> list[Tool]:
         Tool(
             name="get_task_context",
             description=(
-                "Get aggregated context for a development task from multiple sources "
-                "(Jira, meeting transcripts, local documentation). "
-                "Provide a task ID (e.g., Jira ticket like 'PROJ-123') to retrieve "
-                "relevant context including ticket details, related meeting discussions, "
-                "and applicable documentation."
+                "Get full synthesized context for a Jira ticket. "
+                "Returns ticket details, comments, linked issues, related meeting discussions, "
+                "and applicable documentation combined into a structured context block."
             ),
             inputSchema={
                 "type": "object",
                 "properties": {
                     "task_id": {
                         "type": "string",
-                        "description": (
-                            "The task identifier (e.g., Jira ticket ID like 'PROJ-123', "
-                            "or any string to search for in meeting transcripts and docs)"
-                        ),
+                        "description": "The Jira ticket ID (e.g., 'PROJ-123')",
                     },
                     "refresh": {
                         "type": "boolean",
@@ -58,11 +54,36 @@ async def list_tools() -> list[Tool]:
             },
         ),
         Tool(
-            name="health_check",
-            description="Check the health status of all configured context adapters.",
+            name="search_context",
+            description=(
+                "Search across all configured sources (Jira, meeting transcripts, docs) "
+                "by keyword. Returns matching content from all sources."
+            ),
             inputSchema={
                 "type": "object",
-                "properties": {},
+                "properties": {
+                    "query": {
+                        "type": "string",
+                        "description": "The search query (keyword or phrase)",
+                    },
+                },
+                "required": ["query"],
+            },
+        ),
+        Tool(
+            name="get_standards",
+            description=(
+                "Get coding standards and guidelines from local documentation. "
+                "Optionally filter by area (e.g., 'typescript', 'testing', 'api')."
+            ),
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "area": {
+                        "type": "string",
+                        "description": "Optional area to filter standards (e.g., 'typescript', 'testing')",
+                    },
+                },
             },
         ),
     ]
@@ -85,7 +106,6 @@ async def call_tool(name: str, arguments: dict) -> list[TextContent]:
             use_cache=not refresh,
         )
 
-        # Format the response
         response_text = f"""# Context for {result['task_id']}
 
 **Sources:** {', '.join(result['sources'])}
@@ -97,21 +117,34 @@ async def call_tool(name: str, arguments: dict) -> list[TextContent]:
 """
         return [TextContent(type="text", text=response_text)]
 
-    elif name == "health_check":
-        result = await orchestrator.health_check()
+    elif name == "search_context":
+        query = arguments.get("query", "")
 
-        status = "healthy" if result["healthy"] else "unhealthy"
-        adapter_status = "\n".join(
-            f"  - {name}: {'OK' if healthy else 'FAIL'}"
-            for name, healthy in result["adapters"].items()
-        )
+        if not query:
+            return [TextContent(type="text", text="Error: query is required")]
 
-        response_text = f"""# DevsContext Health Check
+        result = await orchestrator.search_context(query=query)
 
-**Status:** {status}
+        response_text = f"""# Search Results for "{query}"
 
-**Adapters:**
-{adapter_status if adapter_status else "  (no adapters configured)"}
+**Sources searched:** {', '.join(result['sources'])}
+**Results found:** {result['result_count']}
+
+---
+
+{result['results']}
+"""
+        return [TextContent(type="text", text=response_text)]
+
+    elif name == "get_standards":
+        area = arguments.get("area")
+
+        result = await orchestrator.get_standards(area=area)
+
+        area_text = f" ({area})" if area else ""
+        response_text = f"""# Coding Standards{area_text}
+
+{result['content']}
 """
         return [TextContent(type="text", text=response_text)]
 

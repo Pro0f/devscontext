@@ -1,28 +1,44 @@
 # DevsContext
 
-An MCP (Model Context Protocol) server that aggregates context from multiple sources to help AI coding assistants understand the full picture of development tasks.
+**Synthesized engineering context for AI coding agents.**
 
-## Features
+DevsContext is an open-source MCP server that gives AI coding tools (Claude Code,
+Cursor, etc.) the full picture when working on a task — requirements, team decisions,
+architecture patterns, and coding standards — all in one synthesized context block.
 
-- **Jira Integration**: Fetch ticket details, acceptance criteria, and related context
-- **Meeting Transcripts**: Search Fireflies.ai transcripts for relevant discussions
-- **Local Documentation**: Index and search project documentation
-- **Intelligent Synthesis**: Combine and rank context from multiple sources
-- **Caching**: TTL-based cache to minimize API calls
+> Large tech companies build this internally. DevsContext brings it to everyone.
 
-## Installation
+## The Problem
+
+AI coding agents are smart but lack context. They don't know:
+- Why a feature was decided on (from your sprint planning meeting)
+- How your team structures code (from your architecture docs)
+- What coding patterns to follow (from your style guides)
+
+Connecting individual MCP servers (Jira, Confluence, etc.) helps, but the AI
+gets flooded with raw data and picks up irrelevant context.
+
+## The Solution
+
+DevsContext fetches from your tools, extracts what's relevant, and synthesizes
+it into a clean context block — so your AI agent knows *what* to build, *why*
+it was decided, and *how* it should be written.
+
+## Quick Start
 
 ```bash
 pip install devscontext
+devscontext init
+claude mcp add devscontext -- devscontext serve
 ```
 
-Or install from source:
+Then in Claude Code:
 
-```bash
-git clone https://github.com/your-org/devscontext.git
-cd devscontext
-pip install -e ".[dev]"
 ```
+work on PROJ-1234
+```
+
+Claude automatically gets the full context.
 
 ## Configuration
 
@@ -50,45 +66,20 @@ cache:
   max_size: 100
 ```
 
-## Usage with Claude Code
-
-Add to your Claude Code MCP configuration (`~/.config/claude-code/config.json`):
-
-```json
-{
-  "mcpServers": {
-    "devscontext": {
-      "command": "devscontext",
-      "args": ["serve"]
-    }
-  }
-}
-```
-
-Then use the `get_task_context` tool:
-
-```
-Use get_task_context with task_id "PROJ-123" to understand what I need to implement.
-```
-
 ## Available Tools
 
-### get_task_context
-
-Fetches aggregated context for a development task.
-
-**Parameters:**
-- `task_id` (required): The task identifier (e.g., "PROJ-123")
-- `refresh` (optional): Force refresh, bypassing cache
-
-### health_check
-
-Returns the health status of all configured adapters.
+| Tool | Description |
+|------|-------------|
+| `get_task_context` | Full synthesized context for a Jira ticket |
+| `search_context` | Search across all sources by keyword |
+| `get_standards` | Coding standards from local documentation |
 
 ## Development
 
 ```bash
-# Install dev dependencies
+# Install from source
+git clone https://github.com/yourusername/devscontext.git
+cd devscontext
 pip install -e ".[dev]"
 
 # Run the MCP server
@@ -97,13 +88,14 @@ devscontext serve
 # Run tests
 pytest
 
-# Type checking
-mypy src/devscontext
-
 # Linting
 ruff check src/
 ```
 
+## Status
+
+Early development — contributions welcome!
+
 ## License
 
-MIT License - see [LICENSE](LICENSE) for details.
+MIT
