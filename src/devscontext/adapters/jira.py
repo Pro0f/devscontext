@@ -226,6 +226,104 @@ class JiraAdapter(Adapter):
         """Alias for get_ticket_full_context for consistency with other adapters."""
         return await self.get_ticket_full_context(task_id)
 
+    async def search_issues(
+        self,
+        query: str,
+        max_results: int = 5,
+    ) -> list[JiraTicket]:
+        """Search for issues using JQL text search.
+
+        Performs a full-text search across issue summary and description.
+        Returns lightweight ticket summaries (no comments or linked issues).
+
+        Args:
+            query: Search terms to find in issues.
+            max_results: Maximum number of results to return.
+
+        Returns:
+            List of matching JiraTicket objects (lightweight, no comments).
+        """
+        if not self._config.enabled:
+            return []
+
+        start_time = time.monotonic()
+        client = self._get_client()
+
+        # Build JQL query with text search
+        # Escape quotes in the query for JQL
+        escaped_query = query.replace('"', '\\"')
+        jql = f'text ~ "{escaped_query}" ORDER BY updated DESC'
+
+        try:
+            response = await client.get(
+                f"{JIRA_API_BASE_PATH}/search",
+                params={
+                    "jql": jql,
+                    "maxResults": max_results,
+                    "fields": "summary,status,assignee,labels,updated",
+                },
+            )
+            response.raise_for_status()
+            data = response.json()
+
+            issues = data.get("issues", [])
+            duration_ms = int((time.monotonic() - start_time) * 1000)
+
+            logger.info(
+                "Jira search completed",
+                extra={
+                    "query": query,
+                    "result_count": len(issues),
+                    "duration_ms": duration_ms,
+                },
+            )
+
+            # Parse into lightweight tickets
+            results: list[JiraTicket] = []
+            for issue in issues:
+                key = issue.get("key", "")
+                fields = issue.get("fields", {})
+                results.append(self._parse_search_result(key, fields))
+
+            return results
+
+        except httpx.HTTPStatusError as e:
+            logger.warning(
+                "Jira search failed",
+                extra={"query": query, "status_code": e.response.status_code},
+            )
+            return []
+
+        except httpx.RequestError as e:
+            logger.warning(
+                "Jira search network error",
+                extra={"query": query, "error": str(e)},
+            )
+            return []
+
+    def _parse_search_result(self, key: str, fields: dict[str, Any]) -> JiraTicket:
+        """Parse a search result into a lightweight JiraTicket."""
+        assignee = None
+        if fields.get("assignee"):
+            assignee = fields["assignee"].get("displayName")
+
+        updated = self._parse_datetime(fields.get("updated"))
+
+        return JiraTicket(
+            ticket_id=key,
+            title=fields.get("summary", ""),
+            description=None,  # Not fetched for search results
+            status=fields.get("status", {}).get("name", "Unknown"),
+            assignee=assignee,
+            labels=fields.get("labels", []),
+            components=[],  # Not fetched for search results
+            acceptance_criteria=None,
+            story_points=None,
+            sprint=None,
+            created=updated,  # Use updated as approximation
+            updated=updated,
+        )
+
     def _parse_ticket(self, key: str, fields: dict[str, Any]) -> JiraTicket:
         """Parse ticket data from Jira API response."""
         description = self._extract_text_from_adf(fields.get("description"))

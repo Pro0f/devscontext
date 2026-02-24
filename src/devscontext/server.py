@@ -65,16 +65,18 @@ async def list_tools() -> list[Tool]:
         Tool(
             name="get_task_context",
             description=(
-                "Get full synthesized context for a Jira ticket. "
-                "Returns ticket details, comments, linked issues, related meeting discussions, "
-                "and applicable documentation combined into a structured context block."
+                "Use this when starting work on a Jira ticket. "
+                "Fetches and synthesizes everything you need: ticket requirements, "
+                "acceptance criteria, discussion comments, related meeting transcripts, "
+                "architecture docs, ADRs, and applicable coding standards. "
+                "Call this FIRST when the user says 'work on PROJ-123' or 'start TICKET-456'."
             ),
             inputSchema={
                 "type": "object",
                 "properties": {
                     "task_id": {
                         "type": "string",
-                        "description": "The Jira ticket ID (e.g., 'PROJ-123')",
+                        "description": "Jira ticket ID (e.g., 'PROJ-123', 'TICKET-456')",
                     },
                     "refresh": {
                         "type": "boolean",
@@ -88,15 +90,18 @@ async def list_tools() -> list[Tool]:
         Tool(
             name="search_context",
             description=(
-                "Search across all configured sources (Jira, meeting transcripts, docs) "
-                "by keyword. Returns matching content from all sources."
+                "Use this for freeform questions about the codebase, architecture, "
+                "or past decisions. Searches across Jira tickets, meeting transcripts, "
+                "and documentation. Use when the user asks questions like "
+                "'how do we handle errors?', 'what was decided about webhooks?', "
+                "or 'why did we choose SQS?'. Input is a natural language question."
             ),
             inputSchema={
                 "type": "object",
                 "properties": {
                     "query": {
                         "type": "string",
-                        "description": "The search query (keyword or phrase)",
+                        "description": "Natural language question or search terms",
                     },
                 },
                 "required": ["query"],
@@ -105,15 +110,21 @@ async def list_tools() -> list[Tool]:
         Tool(
             name="get_standards",
             description=(
-                "Get coding standards and guidelines from local documentation. "
-                "Optionally filter by area (e.g., 'typescript', 'testing', 'api')."
+                "Use this when checking coding conventions before or during implementation. "
+                "Returns coding standards, style guides, and best practices from local docs. "
+                "Filter by area: 'testing', 'error-handling', 'typescript', 'api', etc. "
+                "Use when the user asks 'what are our testing conventions?' or "
+                "'how should I handle errors?' or before writing significant code."
             ),
             inputSchema={
                 "type": "object",
                 "properties": {
                     "area": {
                         "type": "string",
-                        "description": "Optional area to filter (e.g., 'typescript')",
+                        "description": (
+                            "Filter by area: 'testing', 'typescript', 'error-handling', etc. "
+                            "Omit to get all standards."
+                        ),
                     },
                 },
             },

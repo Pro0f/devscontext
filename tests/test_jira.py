@@ -1,5 +1,6 @@
 """Tests for the Jira adapter."""
 
+import httpx
 import pytest
 from pytest_httpx import HTTPXMock
 
@@ -248,3 +249,81 @@ class TestJiraAdapter:
         assert linked[0].title == "Linked issue"
         assert linked[0].status == "Done"
         assert linked[0].link_type == "blocks"
+
+    async def test_search_issues(self, jira_adapter: JiraAdapter, httpx_mock: HTTPXMock) -> None:
+        """Test searching for issues."""
+        search_response = {
+            "issues": [
+                {
+                    "key": "TEST-123",
+                    "fields": {
+                        "summary": "Handle retries in webhook",
+                        "status": {"name": "In Progress"},
+                        "assignee": {"displayName": "Alice"},
+                        "labels": ["backend"],
+                        "updated": "2024-01-16T10:00:00.000+0000",
+                    },
+                },
+                {
+                    "key": "TEST-456",
+                    "fields": {
+                        "summary": "Retry logic for payments",
+                        "status": {"name": "Done"},
+                        "assignee": None,
+                        "labels": [],
+                        "updated": "2024-01-15T10:00:00.000+0000",
+                    },
+                },
+            ]
+        }
+
+        # Match search endpoint - the URL will have jql and other params
+        def match_search_url(request: httpx.Request) -> bool:
+            return "/rest/api/3/search" in str(request.url)
+
+        httpx_mock.add_callback(
+            callback=lambda request: httpx.Response(200, json=search_response),
+            match_headers=None,
+        )
+
+        results = await jira_adapter.search_issues("retry", max_results=5)
+
+        assert len(results) == 2
+        assert results[0].ticket_id == "TEST-123"
+        assert results[0].title == "Handle retries in webhook"
+        assert results[0].assignee == "Alice"
+        assert results[1].ticket_id == "TEST-456"
+        assert results[1].assignee is None
+
+    async def test_search_issues_empty_results(
+        self, jira_adapter: JiraAdapter, httpx_mock: HTTPXMock
+    ) -> None:
+        """Test search with no results."""
+        httpx_mock.add_callback(
+            callback=lambda request: httpx.Response(200, json={"issues": []}),
+        )
+
+        results = await jira_adapter.search_issues("nonexistent query")
+
+        assert results == []
+
+    async def test_search_issues_disabled(self) -> None:
+        """Test search when adapter is disabled."""
+        config = JiraConfig(enabled=False)
+        adapter = JiraAdapter(config)
+
+        results = await adapter.search_issues("retry")
+
+        assert results == []
+
+    async def test_search_issues_handles_error(
+        self, jira_adapter: JiraAdapter, httpx_mock: HTTPXMock
+    ) -> None:
+        """Test search handles API errors gracefully."""
+        httpx_mock.add_callback(
+            callback=lambda request: httpx.Response(500),
+        )
+
+        results = await jira_adapter.search_issues("retry")
+
+        assert results == []

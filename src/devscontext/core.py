@@ -385,49 +385,144 @@ class DevsContextCore:
     async def search_context(self, query: str) -> dict[str, str | list[str] | int]:
         """Search across all sources by keyword.
 
-        This is a placeholder implementation that will be enhanced
-        when adapters support search functionality.
+        Searches Jira, meetings, and local docs in parallel for freeform queries
+        like "how do we handle retries?" or "what was decided about payments?".
+
+        No LLM synthesis - returns formatted search results directly.
+        No caching - queries are too varied.
 
         Args:
             query: The search query.
 
         Returns:
-            Dictionary with search results and metadata.
+            Dictionary with formatted results and metadata.
         """
         start_time = time.monotonic()
-        sources: list[str] = []
+        logger.info("Search context", extra={"query": query})
 
-        if self._config.sources.jira.enabled:
-            sources.append("jira")
-        if self._config.sources.fireflies.enabled:
-            sources.append("fireflies")
-        if self._config.sources.docs.enabled:
-            sources.append("docs")
+        # Search all sources in parallel
+        jira_coro = self._search_jira(query)
+        meetings_coro = self._search_meetings(query)
+        docs_coro = self._search_docs(query)
 
-        # TODO: Implement real search across adapters
-        logger.info("Search context", extra={"query": query, "sources": sources})
+        results = await asyncio.gather(jira_coro, meetings_coro, docs_coro, return_exceptions=True)
+
+        jira_results, meeting_results, docs_results = results
+
+        # Format results into markdown
+        sections: list[str] = [f'## Search Results for "{query}"']
+        sources_used: list[str] = []
+        total_results = 0
+
+        # Format Jira results
+        if isinstance(jira_results, list) and jira_results:
+            sources_used.append("jira")
+            total_results += len(jira_results)
+            sections.append(self._format_jira_search_results(jira_results))
+        elif isinstance(jira_results, BaseException):
+            logger.warning("Jira search failed", extra={"error": str(jira_results)})
+
+        # Format meeting results
+        if isinstance(meeting_results, MeetingContext) and meeting_results.meetings:
+            sources_used.append("fireflies")
+            total_results += len(meeting_results.meetings)
+            sections.append(self._format_meeting_search_results(meeting_results))
+        elif isinstance(meeting_results, BaseException):
+            logger.warning("Meeting search failed", extra={"error": str(meeting_results)})
+
+        # Format docs results
+        if isinstance(docs_results, DocsContext) and docs_results.sections:
+            sources_used.append("docs")
+            total_results += len(docs_results.sections)
+            sections.append(self._format_docs_search_results(docs_results))
+        elif isinstance(docs_results, BaseException):
+            logger.warning("Docs search failed", extra={"error": str(docs_results)})
+
+        # Handle no results
+        if total_results == 0:
+            sections.append("\nNo results found.")
 
         duration_ms = int((time.monotonic() - start_time) * 1000)
 
-        results = f"""## Search Results
-
-No real search implemented yet. Query: "{query}"
-
-This will search across:
-- Jira tickets (title, description, comments)
-- Meeting transcripts (full text search)
-- Local documentation (keyword matching)
-"""
+        logger.info(
+            "Search completed",
+            extra={
+                "query": query,
+                "result_count": total_results,
+                "sources": sources_used,
+                "duration_ms": duration_ms,
+            },
+        )
 
         return {
             "query": query,
-            "results": results,
-            "sources": sources if sources else ["none configured"],
-            "result_count": 0,
+            "results": "\n\n".join(sections),
+            "sources": sources_used if sources_used else ["none"],
+            "result_count": total_results,
             "duration_ms": duration_ms,
         }
 
-    async def get_standards(self, area: str | None = None) -> dict[str, str | None | int]:
+    async def _search_jira(self, query: str) -> list[JiraTicket]:
+        """Search Jira for matching issues."""
+        jira = self._get_jira()
+        if jira is None:
+            return []
+        return await jira.search_issues(query, max_results=5)
+
+    async def _search_meetings(self, query: str) -> MeetingContext:
+        """Search meeting transcripts for query."""
+        fireflies = self._get_fireflies()
+        if fireflies is None:
+            return MeetingContext(meetings=[])
+        return await fireflies.get_meeting_context(query)
+
+    async def _search_docs(self, query: str) -> DocsContext:
+        """Search local documentation for query."""
+        docs = self._get_docs()
+        if docs is None:
+            return DocsContext(sections=[])
+        return await docs.search_docs(query, max_results=5)
+
+    def _format_jira_search_results(self, tickets: list[JiraTicket]) -> str:
+        """Format Jira search results as markdown."""
+        parts = ["### Jira Tickets"]
+        for ticket in tickets:
+            status_badge = f"[{ticket.status}]"
+            assignee = f" — {ticket.assignee}" if ticket.assignee else ""
+            parts.append(f"- **{ticket.ticket_id}**: {ticket.title} {status_badge}{assignee}")
+        return "\n".join(parts)
+
+    def _format_meeting_search_results(self, context: MeetingContext) -> str:
+        """Format meeting search results as markdown."""
+        parts = ["### Meeting Discussions"]
+        for meeting in context.meetings:
+            date_str = meeting.meeting_date.strftime("%Y-%m-%d")
+            parts.append(f"\n**{meeting.meeting_title}** ({date_str})")
+            # Truncate excerpt for search results
+            excerpt = meeting.excerpt
+            if len(excerpt) > 300:
+                excerpt = excerpt[:300] + "..."
+            parts.append(excerpt)
+        return "\n".join(parts)
+
+    def _format_docs_search_results(self, context: DocsContext) -> str:
+        """Format docs search results as markdown."""
+        parts = ["### Documentation"]
+        for section in context.sections:
+            title = section.section_title or section.file_path
+            doc_type = f"[{section.doc_type}]"
+            parts.append(f"\n**{title}** {doc_type}")
+            parts.append(f"*Source: {section.file_path}*")
+            # Truncate content for search results
+            content = section.content
+            if len(content) > 200:
+                content = content[:200] + "..."
+            parts.append(content)
+        return "\n".join(parts)
+
+    async def get_standards(
+        self, area: str | None = None
+    ) -> dict[str, str | None | int | list[str]]:
         """Get coding standards from local documentation.
 
         Args:
@@ -440,23 +535,42 @@ This will search across:
         logger.info("Get standards", extra={"area": area})
 
         docs = self._get_docs()
+        available_areas: list[str] = []
+
         if docs is None:
-            content = self._get_standards_not_configured_message(area)
+            content = self._get_standards_not_configured_message()
             section_count = 0
         else:
             docs_context = await docs.get_standards(area)
+            available_areas = await docs.list_standards_areas()
+
             if docs_context.sections:
-                # Format sections into markdown
-                parts: list[str] = []
+                # Format sections into markdown with header
+                title = f"# Coding Standards: {area}" if area else "# Coding Standards"
+                parts: list[str] = [title, ""]
+
                 for section in docs_context.sections:
+                    # Add source file info
+                    source_info = f"*Source: {section.file_path}*"
                     if section.section_title:
-                        parts.append(f"## {section.section_title}\n\n{section.content}")
-                    else:
+                        parts.append(f"## {section.section_title}")
+                        parts.append(source_info)
+                        parts.append("")
                         parts.append(section.content)
-                content = "\n\n---\n\n".join(parts)
+                    else:
+                        parts.append(source_info)
+                        parts.append("")
+                        parts.append(section.content)
+                    parts.append("")  # Blank line between sections
+
+                content = "\n".join(parts)
                 section_count = len(docs_context.sections)
+            elif area and available_areas:
+                # Area specified but no matches - show available areas
+                content = self._get_no_matching_standards_message(area, available_areas)
+                section_count = 0
             else:
-                content = self._get_standards_not_configured_message(area)
+                content = self._get_standards_not_configured_message()
                 section_count = 0
 
         duration_ms = int((time.monotonic() - start_time) * 1000)
@@ -469,21 +583,24 @@ This will search across:
             "area": area,
             "content": content,
             "section_count": section_count,
+            "available_areas": available_areas,
+            "duration_ms": duration_ms,
         }
 
-    def _get_standards_not_configured_message(self, area: str | None) -> str:
+    def _get_standards_not_configured_message(self) -> str:
         """Generate message when no standards are configured."""
-        area_filter = f" for {area}" if area else ""
-        return f"""## Coding Standards{area_filter}
+        return """# Coding Standards
 
 No standards documents found.
 
-To add standards:
+## How to Configure
+
 1. Create markdown files in your docs directory
-2. Configure `sources.docs.paths` in .devscontext.yaml
+2. Configure `sources.docs.paths` in `.devscontext.yaml`
 3. Place files in a `standards/` subdirectory
 
-Example structure:
+### Example Structure
+
 ```
 docs/
   standards/
@@ -491,6 +608,32 @@ docs/
     testing.md
     api-design.md
 ```
+
+### Example .devscontext.yaml
+
+```yaml
+sources:
+  docs:
+    enabled: true
+    paths:
+      - ./docs
+```
+
+Files in the `standards/` directory will be automatically recognized as coding standards.
+"""
+
+    def _get_no_matching_standards_message(self, area: str, available_areas: list[str]) -> str:
+        """Generate message when no standards match the requested area."""
+        areas_list = "\n".join(f"- `{a}`" for a in available_areas)
+        return f"""# Coding Standards: {area}
+
+No standards found for "{area}".
+
+## Available Areas
+
+{areas_list}
+
+Try one of the areas above, or omit the area parameter to see all standards.
 """
 
     async def close(self) -> None:
