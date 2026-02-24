@@ -1,0 +1,35 @@
+{
+  "meetings": [
+    {
+      "meeting_title": "Sprint 42 Planning - Authentication",
+      "meeting_date": "2024-01-12T10:00:00+00:00",
+      "participants": ["Alice Chen", "Bob Smith", "Carol Davis", "David Lee"],
+      "excerpt": "**David Lee:** Let's discuss AUTH-123, the Google OAuth implementation.\n\n**Alice Chen:** I've been looking at this. The main decision is whether to use authorization code flow or implicit flow.\n\n**Bob Smith:** Definitely authorization code with PKCE. Implicit flow is deprecated for web apps now.\n\n**Carol Davis:** Agreed. Also, we need to think about token storage. I suggest using our vault service.\n\n**David Lee:** Good point. Alice, can you make sure to use the vault client from the infra package?\n\n**Alice Chen:** Yes, I'll use the existing VaultClient. One question - should we support refresh token rotation?\n\n**Bob Smith:** Yes, that's a security best practice. Rotate refresh tokens on each use.\n\n**David Lee:** Let's make that a requirement for AUTH-123.",
+      "action_items": [
+        "Alice: Implement PKCE flow instead of implicit",
+        "Carol: Create vault path for Google OAuth secrets",
+        "Alice: Add refresh token rotation"
+      ],
+      "decisions": [
+        "Use authorization code flow with PKCE (not implicit)",
+        "Store tokens in Vault service",
+        "Implement refresh token rotation"
+      ]
+    },
+    {
+      "meeting_title": "Security Review - OAuth Implementation",
+      "meeting_date": "2024-01-17T14:00:00+00:00",
+      "participants": ["Alice Chen", "Emily Wang", "Frank Miller"],
+      "excerpt": "**Emily Wang:** I'm reviewing AUTH-123 for security. A few concerns.\n\n**Alice Chen:** Sure, go ahead.\n\n**Emily Wang:** First, make sure the state parameter is cryptographically random and verified on callback.\n\n**Frank Miller:** Also check the redirect URI validation. It should be an exact match, not a prefix.\n\n**Alice Chen:** Got it. I'll add both of those checks.\n\n**Emily Wang:** Last thing - the session cookie should be httpOnly and secure flags set.\n\n**Alice Chen:** Already planned. I'm following our AuthMiddleware patterns.\n\n**Emily Wang:** Great. Looks good otherwise. Approve once those changes are in.",
+      "action_items": [
+        "Alice: Add cryptographic state parameter",
+        "Alice: Implement exact redirect URI matching",
+        "Alice: Ensure httpOnly and secure cookie flags"
+      ],
+      "decisions": [
+        "State parameter must be cryptographically random",
+        "Redirect URI validation must be exact match"
+      ]
+    }
+  ]
+}

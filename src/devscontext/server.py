@@ -16,14 +16,15 @@ Example:
 from __future__ import annotations
 
 import asyncio
+import time
 from typing import Any
 
 from mcp.server import Server
 from mcp.server.stdio import stdio_server
 from mcp.types import TextContent, Tool
 
-from devscontext.config import load_config
-from devscontext.core import ContextOrchestrator
+from devscontext.config import load_devscontext_config
+from devscontext.core import DevsContextCore
 from devscontext.logging import get_logger
 
 logger = get_logger(__name__)
@@ -31,28 +32,28 @@ logger = get_logger(__name__)
 # Initialize the MCP server
 server = Server("devscontext")
 
-# Global orchestrator instance (initialized on startup)
-_orchestrator: ContextOrchestrator | None = None
+# Global core instance (initialized on startup)
+_core: DevsContextCore | None = None
 
 
-def get_orchestrator() -> ContextOrchestrator:
-    """Get or create the global orchestrator instance.
+def get_core() -> DevsContextCore:
+    """Get or create the global DevsContextCore instance.
 
-    Lazily initializes the orchestrator on first access using
+    Lazily initializes the core on first access using
     the configuration loaded from the config file.
 
     Returns:
-        The singleton ContextOrchestrator instance.
+        The singleton DevsContextCore instance.
     """
-    global _orchestrator
-    if _orchestrator is None:
-        config = load_config()
-        _orchestrator = ContextOrchestrator(config)
-        logger.info("Orchestrator initialized")
-    return _orchestrator
+    global _core
+    if _core is None:
+        config = load_devscontext_config()
+        _core = DevsContextCore(config)
+        logger.info("DevsContextCore initialized")
+    return _core
 
 
-@server.list_tools()
+@server.list_tools()  # type: ignore[no-untyped-call, untyped-decorator]
 async def list_tools() -> list[Tool]:
     """List available MCP tools.
 
@@ -120,11 +121,11 @@ async def list_tools() -> list[Tool]:
     ]
 
 
-@server.call_tool()
+@server.call_tool()  # type: ignore[untyped-decorator]
 async def call_tool(name: str, arguments: dict[str, Any]) -> list[TextContent]:
     """Handle MCP tool calls.
 
-    Routes tool calls to the appropriate orchestrator method and formats
+    Routes tool calls to the appropriate core method and formats
     the response for the MCP client.
 
     Args:
@@ -134,55 +135,139 @@ async def call_tool(name: str, arguments: dict[str, Any]) -> list[TextContent]:
     Returns:
         List containing a single TextContent with the tool result.
     """
-    orchestrator = get_orchestrator()
-    logger.debug("Tool call received", extra={"tool": name, "arguments": arguments})
+    start_time = time.monotonic()
+    core = get_core()
 
-    if name == "get_task_context":
-        task_id = arguments.get("task_id", "")
-        refresh = arguments.get("refresh", False)
+    logger.info(
+        "Tool call received",
+        extra={"tool": name, "arguments": arguments},
+    )
 
-        if not task_id:
-            logger.warning("get_task_context called without task_id")
-            return [TextContent(type="text", text="Error: task_id is required")]
+    try:
+        if name == "get_task_context":
+            return await _handle_get_task_context(core, arguments, start_time)
 
-        result = await orchestrator.get_task_context(
+        elif name == "search_context":
+            return await _handle_search_context(core, arguments, start_time)
+
+        elif name == "get_standards":
+            return await _handle_get_standards(core, arguments, start_time)
+
+        else:
+            logger.warning("Unknown tool called", extra={"tool": name})
+            return [TextContent(type="text", text=f"Error: Unknown tool '{name}'")]
+
+    except Exception as e:
+        duration_ms = int((time.monotonic() - start_time) * 1000)
+        logger.exception(
+            "Tool call failed",
+            extra={"tool": name, "error": str(e), "duration_ms": duration_ms},
+        )
+        return [
+            TextContent(
+                type="text",
+                text=f"Error: An unexpected error occurred while processing '{name}': {e}",
+            )
+        ]
+
+
+async def _handle_get_task_context(
+    core: DevsContextCore,
+    arguments: dict[str, Any],
+    start_time: float,
+) -> list[TextContent]:
+    """Handle the get_task_context tool call.
+
+    Args:
+        core: The DevsContextCore instance.
+        arguments: Tool arguments.
+        start_time: When the request started for duration logging.
+
+    Returns:
+        List containing TextContent with the synthesized context.
+    """
+    task_id = arguments.get("task_id", "")
+    refresh = arguments.get("refresh", False)
+
+    if not task_id:
+        logger.warning("get_task_context called without task_id")
+        return [TextContent(type="text", text="Error: task_id is required")]
+
+    try:
+        result = await core.get_task_context(
             task_id=task_id,
             use_cache=not refresh,
         )
 
+        duration_ms = int((time.monotonic() - start_time) * 1000)
         logger.info(
             "get_task_context completed",
-            extra={"task_id": task_id, "item_count": result["item_count"]},
+            extra={
+                "task_id": task_id,
+                "source_count": len(result.sources_used),
+                "cached": result.cached,
+                "duration_ms": duration_ms,
+            },
         )
 
-        response_text = f"""# Context for {result["task_id"]}
+        # Return the synthesized markdown directly
+        return [TextContent(type="text", text=result.synthesized)]
 
-**Sources:** {", ".join(result["sources"])}
-**Items found:** {result["item_count"]}
+    except Exception as e:
+        duration_ms = int((time.monotonic() - start_time) * 1000)
+        logger.exception(
+            "get_task_context failed",
+            extra={"task_id": task_id, "error": str(e), "duration_ms": duration_ms},
+        )
+        return [
+            TextContent(
+                type="text",
+                text=f"Error fetching context for {task_id}: {e}\n\n"
+                f"Please check that your Jira and Fireflies credentials are configured correctly.",
+            )
+        ]
 
----
 
-{result["context"]}
-"""
-        return [TextContent(type="text", text=response_text)]
+async def _handle_search_context(
+    core: DevsContextCore,
+    arguments: dict[str, Any],
+    start_time: float,
+) -> list[TextContent]:
+    """Handle the search_context tool call.
 
-    elif name == "search_context":
-        query = arguments.get("query", "")
+    Args:
+        core: The DevsContextCore instance.
+        arguments: Tool arguments.
+        start_time: When the request started for duration logging.
 
-        if not query:
-            logger.warning("search_context called without query")
-            return [TextContent(type="text", text="Error: query is required")]
+    Returns:
+        List containing TextContent with search results.
+    """
+    query = arguments.get("query", "")
 
-        result = await orchestrator.search_context(query=query)
+    if not query:
+        logger.warning("search_context called without query")
+        return [TextContent(type="text", text="Error: query is required")]
 
+    try:
+        result = await core.search_context(query=query)
+
+        duration_ms = int((time.monotonic() - start_time) * 1000)
         logger.info(
             "search_context completed",
-            extra={"query": query, "result_count": result["result_count"]},
+            extra={
+                "query": query,
+                "result_count": result["result_count"],
+                "duration_ms": duration_ms,
+            },
         )
+
+        sources = result.get("sources", [])
+        sources_str = ", ".join(sources) if isinstance(sources, list) else str(sources)
 
         response_text = f"""# Search Results for "{query}"
 
-**Sources searched:** {", ".join(result["sources"])}
+**Sources searched:** {sources_str}
 **Results found:** {result["result_count"]}
 
 ---
@@ -191,12 +276,45 @@ async def call_tool(name: str, arguments: dict[str, Any]) -> list[TextContent]:
 """
         return [TextContent(type="text", text=response_text)]
 
-    elif name == "get_standards":
-        area = arguments.get("area")
+    except Exception as e:
+        duration_ms = int((time.monotonic() - start_time) * 1000)
+        logger.exception(
+            "search_context failed",
+            extra={"query": query, "error": str(e), "duration_ms": duration_ms},
+        )
+        return [
+            TextContent(
+                type="text",
+                text=f"Error searching for '{query}': {e}",
+            )
+        ]
 
-        result = await orchestrator.get_standards(area=area)
 
-        logger.info("get_standards completed", extra={"area": area})
+async def _handle_get_standards(
+    core: DevsContextCore,
+    arguments: dict[str, Any],
+    start_time: float,
+) -> list[TextContent]:
+    """Handle the get_standards tool call.
+
+    Args:
+        core: The DevsContextCore instance.
+        arguments: Tool arguments.
+        start_time: When the request started for duration logging.
+
+    Returns:
+        List containing TextContent with standards content.
+    """
+    area = arguments.get("area")
+
+    try:
+        result = await core.get_standards(area=area)
+
+        duration_ms = int((time.monotonic() - start_time) * 1000)
+        logger.info(
+            "get_standards completed",
+            extra={"area": area, "duration_ms": duration_ms},
+        )
 
         area_text = f" ({area})" if area else ""
         response_text = f"""# Coding Standards{area_text}
@@ -205,9 +323,18 @@ async def call_tool(name: str, arguments: dict[str, Any]) -> list[TextContent]:
 """
         return [TextContent(type="text", text=response_text)]
 
-    else:
-        logger.warning("Unknown tool called", extra={"tool": name})
-        return [TextContent(type="text", text=f"Error: Unknown tool '{name}'")]
+    except Exception as e:
+        duration_ms = int((time.monotonic() - start_time) * 1000)
+        logger.exception(
+            "get_standards failed",
+            extra={"area": area, "error": str(e), "duration_ms": duration_ms},
+        )
+        return [
+            TextContent(
+                type="text",
+                text=f"Error fetching standards: {e}",
+            )
+        ]
 
 
 async def run_server() -> None:

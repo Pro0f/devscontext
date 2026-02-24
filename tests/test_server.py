@@ -1,6 +1,5 @@
 """Tests for the DevsContextCore orchestration."""
 
-
 import pytest
 
 from devscontext.core import DevsContextCore
@@ -31,9 +30,7 @@ def core(config: DevsContextConfig) -> DevsContextCore:
 class TestDevsContextCore:
     """Tests for DevsContextCore."""
 
-    async def test_get_task_context_returns_task_context(
-        self, core: DevsContextCore
-    ) -> None:
+    async def test_get_task_context_returns_task_context(self, core: DevsContextCore) -> None:
         """Test that get_task_context returns a TaskContext."""
         result = await core.get_task_context("TEST-123")
 
@@ -43,17 +40,13 @@ class TestDevsContextCore:
         assert isinstance(result.sources_used, list)
         assert result.fetch_duration_ms >= 0
 
-    async def test_get_task_context_task_id_matches(
-        self, core: DevsContextCore
-    ) -> None:
+    async def test_get_task_context_task_id_matches(self, core: DevsContextCore) -> None:
         """Test that the task_id in response matches input."""
         result = await core.get_task_context("PROJ-456")
 
         assert result.task_id == "PROJ-456"
 
-    async def test_get_task_context_no_adapters_enabled(
-        self, core: DevsContextCore
-    ) -> None:
+    async def test_get_task_context_no_adapters_enabled(self, core: DevsContextCore) -> None:
         """Test that context is still returned when no adapters enabled."""
         result = await core.get_task_context("TEST-123")
 
@@ -104,9 +97,7 @@ class TestDevsContextCore:
         result2 = await core.get_task_context("CACHE-HIT")
         assert result2.cached is True
 
-    async def test_use_cache_false_bypasses_cache(
-        self, core: DevsContextCore
-    ) -> None:
+    async def test_use_cache_false_bypasses_cache(self, core: DevsContextCore) -> None:
         """Test that use_cache=False bypasses cache."""
         # First call
         await core.get_task_context("BYPASS-CACHE")

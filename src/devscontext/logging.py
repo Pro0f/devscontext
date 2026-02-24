@@ -16,7 +16,10 @@ Usage:
 
 import logging
 import sys
-from typing import Any
+from typing import TYPE_CHECKING, Any
+
+if TYPE_CHECKING:
+    from collections.abc import Callable
 
 from devscontext.constants import LOG_DATE_FORMAT, LOG_FORMAT
 
@@ -152,7 +155,7 @@ class LogContext:
         """
         self.logger = logger
         self.fields = fields
-        self._old_factory: logging.Callable[..., logging.LogRecord] | None = None
+        self._old_factory: Callable[..., logging.LogRecord] | None = None
 
     def __enter__(self) -> "LogContext":
         """Enter the context and set up the log record factory."""

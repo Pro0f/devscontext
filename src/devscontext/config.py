@@ -4,9 +4,9 @@ This module handles loading and parsing configuration from YAML files,
 with support for environment variable expansion.
 
 Example:
-    config = load_config()
-    if config.adapters.jira.enabled:
-        print(f"Jira URL: {config.adapters.jira.base_url}")
+    config = load_devscontext_config()
+    if config.sources.jira.enabled:
+        print(f"Jira URL: {config.sources.jira.base_url}")
 """
 
 from __future__ import annotations
@@ -24,6 +24,7 @@ from devscontext.constants import (
     DEFAULT_CACHE_MAX_SIZE,
     DEFAULT_CACHE_TTL_SECONDS,
 )
+from devscontext.models import DevsContextConfig
 
 
 class JiraConfig(BaseModel):
@@ -189,3 +190,75 @@ def find_config_file() -> Path | None:
             return config_file
 
     return None
+
+
+def load_devscontext_config(config_path: Path | None = None) -> DevsContextConfig:
+    """Load DevsContextConfig from YAML file.
+
+    This is the new config loader that returns DevsContextConfig with
+    the sources/synthesis/cache structure.
+
+    Environment variables in the format ${VAR_NAME} or $VAR_NAME are expanded.
+
+    Args:
+        config_path: Path to config file. If None, searches for .devscontext.yaml
+                    in current directory and parent directories.
+
+    Returns:
+        Loaded DevsContextConfig with env vars expanded.
+    """
+    if config_path is None:
+        config_path = find_config_file()
+
+    if config_path is None or not config_path.exists():
+        return DevsContextConfig()
+
+    with open(config_path) as f:
+        data: dict[str, Any] = yaml.safe_load(f) or {}
+
+    # Expand environment variables
+    data = expand_env_vars(data)
+
+    # Transform old config format to new format if needed
+    if "adapters" in data and "sources" not in data:
+        data = _transform_legacy_config(data)
+
+    return DevsContextConfig.model_validate(data)
+
+
+def _transform_legacy_config(data: dict[str, Any]) -> dict[str, Any]:
+    """Transform legacy config format to new format.
+
+    Legacy format uses 'adapters' key with 'local_docs'.
+    New format uses 'sources' key with 'docs'.
+
+    Args:
+        data: Legacy config data.
+
+    Returns:
+        Transformed config data for DevsContextConfig.
+    """
+    adapters = data.pop("adapters", {})
+    cache = data.get("cache", {})
+
+    # Transform adapters to sources
+    sources: dict[str, Any] = {}
+
+    if "jira" in adapters:
+        sources["jira"] = adapters["jira"]
+
+    if "fireflies" in adapters:
+        sources["fireflies"] = adapters["fireflies"]
+
+    if "local_docs" in adapters:
+        sources["docs"] = adapters["local_docs"]
+
+    # Convert cache TTL from seconds to minutes if present
+    if "ttl_seconds" in cache and "ttl_minutes" not in cache:
+        cache["ttl_minutes"] = cache.pop("ttl_seconds") // 60
+
+    return {
+        "sources": sources,
+        "synthesis": data.get("synthesis", {}),
+        "cache": cache,
+    }

@@ -1,0 +1,53 @@
+{
+  "ticket": {
+    "ticket_id": "AUTH-123",
+    "title": "Implement OAuth2 authentication with Google SSO",
+    "description": "## Overview\n\nWe need to implement OAuth2 authentication for our web application using Google as the identity provider.\n\n## Requirements\n\n- Support Google Sign-In button on login page\n- Implement PKCE flow for security\n- Store refresh tokens securely in the vault\n- Add session management with 24h expiry\n\n## Technical Notes\n\n- Use the existing AuthService module\n- Follow our security standards for token handling\n- Integration with user-service for profile creation",
+    "status": "In Progress",
+    "assignee": "Alice Chen",
+    "labels": ["auth", "security", "oauth", "P1"],
+    "components": ["backend", "auth-service", "api"],
+    "acceptance_criteria": "- [ ] Users can click 'Sign in with Google'\n- [ ] First-time users get a profile created\n- [ ] Returning users are recognized\n- [ ] Sessions expire after 24 hours\n- [ ] Refresh tokens work correctly",
+    "story_points": 8.0,
+    "sprint": "Sprint 42 - Authentication",
+    "created": "2024-01-15T09:00:00+00:00",
+    "updated": "2024-01-18T14:30:00+00:00"
+  },
+  "comments": [
+    {
+      "author": "Bob Smith",
+      "body": "I reviewed the Google OAuth docs. We should use the authorization code flow with PKCE, not implicit flow. This is more secure for web apps.\n\nSee: https://developers.google.com/identity/protocols/oauth2/web-server",
+      "created": "2024-01-15T11:00:00+00:00"
+    },
+    {
+      "author": "Carol Davis",
+      "body": "Reminder: We need to store the client secret in vault, not in config files. I've created a vault path for this: `secret/auth/google-oauth`",
+      "created": "2024-01-16T09:30:00+00:00"
+    },
+    {
+      "author": "Alice Chen",
+      "body": "Started implementation. I'm basing the token handling on the pattern from the payments-auth module. Using jose library for JWT validation.",
+      "created": "2024-01-17T10:00:00+00:00"
+    }
+  ],
+  "linked_issues": [
+    {
+      "ticket_id": "AUTH-100",
+      "title": "Set up Google Cloud OAuth credentials",
+      "status": "Done",
+      "link_type": "is blocked by"
+    },
+    {
+      "ticket_id": "AUTH-125",
+      "title": "Add user profile auto-creation on first login",
+      "status": "To Do",
+      "link_type": "blocks"
+    },
+    {
+      "ticket_id": "AUTH-110",
+      "title": "Implement session management service",
+      "status": "In Review",
+      "link_type": "relates to"
+    }
+  ]
+}

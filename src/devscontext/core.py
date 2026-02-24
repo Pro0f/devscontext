@@ -25,11 +25,11 @@ from typing import TYPE_CHECKING
 from devscontext.adapters import FirefliesAdapter, JiraAdapter, LocalDocsAdapter
 from devscontext.cache import SimpleCache
 from devscontext.logging import get_logger
-from devscontext.models import DocsContext, MeetingContext, TaskContext
+from devscontext.models import DocsContext, JiraContext, MeetingContext, TaskContext
 from devscontext.synthesis import SynthesisEngine
 
 if TYPE_CHECKING:
-    from devscontext.models import DevsContextConfig, JiraContext
+    from devscontext.models import DevsContextConfig
 
 logger = get_logger(__name__)
 
@@ -141,9 +141,7 @@ class DevsContextCore:
                     )
 
         # Fetch context from adapters in parallel
-        jira_context, meeting_context, docs_context = await self._fetch_all_context(
-            task_id
-        )
+        jira_context, meeting_context, docs_context = await self._fetch_all_context(task_id)
 
         # Build sources list
         sources_used: list[str] = []
@@ -151,8 +149,7 @@ class DevsContextCore:
             sources_used.append(f"jira:{jira_context.ticket.ticket_id}")
         if meeting_context and meeting_context.meetings:
             sources_used.extend(
-                f"fireflies:{m.meeting_date.strftime('%Y-%m-%d')}"
-                for m in meeting_context.meetings
+                f"fireflies:{m.meeting_date.strftime('%Y-%m-%d')}" for m in meeting_context.meetings
             )
         if docs_context and docs_context.sections:
             sources_used.extend(f"docs:{s.file_path}" for s in docs_context.sections)
@@ -210,32 +207,34 @@ class DevsContextCore:
         docs_coro = self._fetch_docs_context(task_id)
 
         # Run all in parallel
-        results = await asyncio.gather(
-            jira_coro, meeting_coro, docs_coro, return_exceptions=True
-        )
+        results = await asyncio.gather(jira_coro, meeting_coro, docs_coro, return_exceptions=True)
 
-        jira_result, meeting_result, docs_result = results
+        raw_jira, raw_meeting, raw_docs = results
 
-        # Handle any exceptions
-        if isinstance(jira_result, Exception):
-            logger.warning(
-                "Jira fetch failed", extra={"error": str(jira_result), "task_id": task_id}
-            )
-            jira_result = None
+        # Handle any exceptions with proper type narrowing
+        jira_result: JiraContext | None = None
+        if isinstance(raw_jira, BaseException):
+            logger.warning("Jira fetch failed", extra={"error": str(raw_jira), "task_id": task_id})
+        elif isinstance(raw_jira, JiraContext):
+            jira_result = raw_jira
 
-        if isinstance(meeting_result, Exception):
+        meeting_result: MeetingContext | None = None
+        if isinstance(raw_meeting, BaseException):
             logger.warning(
                 "Fireflies fetch failed",
-                extra={"error": str(meeting_result), "task_id": task_id},
+                extra={"error": str(raw_meeting), "task_id": task_id},
             )
-            meeting_result = None
+        elif isinstance(raw_meeting, MeetingContext):
+            meeting_result = raw_meeting
 
-        if isinstance(docs_result, Exception):
+        docs_result: DocsContext | None = None
+        if isinstance(raw_docs, BaseException):
             logger.warning(
                 "Docs fetch failed",
-                extra={"error": str(docs_result), "task_id": task_id},
+                extra={"error": str(raw_docs), "task_id": task_id},
             )
-            docs_result = None
+        elif isinstance(raw_docs, DocsContext):
+            docs_result = raw_docs
 
         return jira_result, meeting_result, docs_result
 
@@ -311,6 +310,93 @@ class DevsContextCore:
         else:
             self._cache.clear()
             logger.debug("Cache cleared")
+
+    async def search_context(self, query: str) -> dict[str, str | list[str] | int]:
+        """Search across all sources by keyword.
+
+        This is a placeholder implementation that will be enhanced
+        when adapters support search functionality.
+
+        Args:
+            query: The search query.
+
+        Returns:
+            Dictionary with search results and metadata.
+        """
+        start_time = time.monotonic()
+        sources: list[str] = []
+
+        if self._config.sources.jira.enabled:
+            sources.append("jira")
+        if self._config.sources.fireflies.enabled:
+            sources.append("fireflies")
+        if self._config.sources.docs.enabled:
+            sources.append("docs")
+
+        # TODO: Implement real search across adapters
+        logger.info("Search context", extra={"query": query, "sources": sources})
+
+        duration_ms = int((time.monotonic() - start_time) * 1000)
+
+        results = f"""## Search Results
+
+No real search implemented yet. Query: "{query}"
+
+This will search across:
+- Jira tickets (title, description, comments)
+- Meeting transcripts (full text search)
+- Local documentation (keyword matching)
+"""
+
+        return {
+            "query": query,
+            "results": results,
+            "sources": sources if sources else ["none configured"],
+            "result_count": 0,
+            "duration_ms": duration_ms,
+        }
+
+    async def get_standards(self, area: str | None = None) -> dict[str, str | None]:
+        """Get coding standards from local documentation.
+
+        Args:
+            area: Optional area to filter (e.g., 'typescript', 'testing').
+
+        Returns:
+            Dictionary containing standards content.
+        """
+        start_time = time.monotonic()
+        logger.info("Get standards", extra={"area": area})
+
+        area_filter = f" for {area}" if area else ""
+
+        # TODO: Implement real standards lookup from docs adapter
+        content = f"""## Coding Standards{area_filter}
+
+No standards documents configured yet.
+
+To add standards:
+1. Create markdown files in your docs directory
+2. Configure `sources.docs.paths` in .devscontext.yaml
+3. Name files like `standards-typescript.md`, `standards-testing.md`, etc.
+
+Example structure:
+```
+docs/
+  standards/
+    typescript.md
+    testing.md
+    api-design.md
+```
+"""
+
+        duration_ms = int((time.monotonic() - start_time) * 1000)
+        logger.info("Get standards completed", extra={"area": area, "duration_ms": duration_ms})
+
+        return {
+            "area": area,
+            "content": content,
+        }
 
     async def close(self) -> None:
         """Close all adapter connections."""

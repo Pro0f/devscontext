@@ -112,7 +112,7 @@ class AnthropicProvider(LLMProvider):
         """Get or create the Anthropic client."""
         if self._client is None:
             try:
-                from anthropic import AsyncAnthropic
+                from anthropic import AsyncAnthropic  # type: ignore[import-not-found]
             except ImportError as e:
                 raise ImportError(
                     "anthropic package not installed. "
@@ -129,7 +129,7 @@ class AnthropicProvider(LLMProvider):
             max_tokens=max_tokens,
             messages=[{"role": "user", "content": prompt}],
         )
-        return response.content[0].text
+        return str(response.content[0].text)
 
 
 class OpenAIProvider(LLMProvider):
@@ -145,11 +145,10 @@ class OpenAIProvider(LLMProvider):
         """Get or create the OpenAI client."""
         if self._client is None:
             try:
-                from openai import AsyncOpenAI
+                from openai import AsyncOpenAI  # type: ignore[import-not-found]
             except ImportError as e:
                 raise ImportError(
-                    "openai package not installed. "
-                    "Install with: pip install devscontext[openai]"
+                    "openai package not installed. Install with: pip install devscontext[openai]"
                 ) from e
             self._client = AsyncOpenAI(api_key=self._api_key)
         return self._client
@@ -197,7 +196,7 @@ class OllamaProvider(LLMProvider):
         )
         response.raise_for_status()
         data = response.json()
-        return data.get("response", "")
+        return str(data.get("response", ""))
 
 
 def create_provider(config: SynthesisConfig) -> LLMProvider:
@@ -293,8 +292,7 @@ class SynthesisEngine:
             parts.append(f"\n### Linked Issues ({len(ctx.linked_issues)})")
             for linked in ctx.linked_issues:
                 parts.append(
-                    f"- [{linked.ticket_id}] {linked.title} "
-                    f"({linked.status}) - {linked.link_type}"
+                    f"- [{linked.ticket_id}] {linked.title} ({linked.status}) - {linked.link_type}"
                 )
 
         return "\n".join(parts)
@@ -459,24 +457,18 @@ class SynthesisEngine:
                 "LLM provider not available, using fallback",
                 extra={"error": str(e), "provider": self._config.provider},
             )
-            return self._format_fallback(
-                task_id, jira_context, meeting_context, docs_context
-            )
+            return self._format_fallback(task_id, jira_context, meeting_context, docs_context)
 
         except ValueError as e:
             logger.warning(
                 "LLM configuration error, using fallback",
                 extra={"error": str(e), "provider": self._config.provider},
             )
-            return self._format_fallback(
-                task_id, jira_context, meeting_context, docs_context
-            )
+            return self._format_fallback(task_id, jira_context, meeting_context, docs_context)
 
         except Exception as e:
             logger.warning(
                 "LLM synthesis failed, using fallback",
                 extra={"error": str(e), "provider": self._config.provider},
             )
-            return self._format_fallback(
-                task_id, jira_context, meeting_context, docs_context
-            )
+            return self._format_fallback(task_id, jira_context, meeting_context, docs_context)

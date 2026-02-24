@@ -1,0 +1,16 @@
+{
+  "sections": [
+    {
+      "file_path": "docs/architecture/auth-service.md",
+      "section_title": "Authentication Service Architecture",
+      "content": "## Authentication Service\n\nThe auth-service handles all authentication and authorization for the platform.\n\n### Components\n\n- **AuthMiddleware**: Express middleware for protecting routes\n- **TokenService**: JWT creation and validation\n- **SessionStore**: Redis-backed session management\n- **VaultClient**: Integration with HashiCorp Vault for secrets\n\n### Token Flow\n\n1. User initiates login (OAuth or credentials)\n2. AuthService validates and issues JWT + refresh token\n3. JWT stored in httpOnly cookie\n4. Refresh token stored in Vault\n5. AuthMiddleware validates JWT on each request\n\n### Security Requirements\n\n- All tokens must be signed with RS256\n- Refresh tokens must be rotated on use\n- Sessions expire after 24 hours\n- Use PKCE for OAuth flows",
+      "doc_type": "architecture"
+    },
+    {
+      "file_path": "docs/standards/security.md",
+      "section_title": "Security Standards - Authentication",
+      "content": "## Authentication Security Standards\n\n### OAuth Implementation\n\n1. **Always use PKCE** for authorization code flow\n2. **Validate state parameter** with cryptographic comparison\n3. **Exact redirect URI matching** - no wildcards or prefixes\n4. **Store secrets in Vault** - never in code or config files\n\n### Cookie Security\n\n```typescript\nres.cookie('session', token, {\n  httpOnly: true,\n  secure: process.env.NODE_ENV === 'production',\n  sameSite: 'strict',\n  maxAge: 24 * 60 * 60 * 1000 // 24 hours\n});\n```\n\n### Token Handling\n\n- JWT expiry: 15 minutes\n- Refresh token expiry: 7 days\n- Rotate refresh tokens on each use\n- Revoke all tokens on password change",
+      "doc_type": "standards"
+    }
+  ]
+}

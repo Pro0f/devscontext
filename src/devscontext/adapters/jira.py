@@ -181,9 +181,24 @@ class JiraAdapter(Adapter):
             return_exceptions=True,
         )
 
-        ticket = results[0] if not isinstance(results[0], Exception) else None
-        comments = results[1] if not isinstance(results[1], Exception) else []
-        linked_issues = results[2] if not isinstance(results[2], Exception) else []
+        ticket_result = results[0]
+        comments_result = results[1]
+        linked_result = results[2]
+
+        # Handle exceptions from gather
+        ticket: JiraTicket | None = None
+        if isinstance(ticket_result, JiraTicket):
+            ticket = ticket_result
+        elif isinstance(ticket_result, Exception):
+            ticket = None
+
+        comments: list[JiraComment] = []
+        if isinstance(comments_result, list):
+            comments = comments_result
+
+        linked_issues: list[LinkedIssue] = []
+        if isinstance(linked_result, list):
+            linked_issues = linked_result
 
         duration_ms = int((time.monotonic() - start_time) * 1000)
 
@@ -195,16 +210,16 @@ class JiraAdapter(Adapter):
             "Assembled full ticket context",
             extra={
                 "ticket_id": ticket_id,
-                "comment_count": len(comments) if isinstance(comments, list) else 0,
-                "linked_count": len(linked_issues) if isinstance(linked_issues, list) else 0,
+                "comment_count": len(comments),
+                "linked_count": len(linked_issues),
                 "duration_ms": duration_ms,
             },
         )
 
         return JiraContext(
             ticket=ticket,
-            comments=comments if isinstance(comments, list) else [],
-            linked_issues=linked_issues if isinstance(linked_issues, list) else [],
+            comments=comments,
+            linked_issues=linked_issues,
         )
 
     async def get_jira_context(self, task_id: str) -> JiraContext | None:
@@ -301,7 +316,7 @@ class JiraAdapter(Adapter):
 
         def extract_from_node(node: dict[str, Any]) -> str:
             if node.get("type") == "text":
-                return node.get("text", "")
+                return str(node.get("text", ""))
             content = node.get("content", [])
             texts = [extract_from_node(child) for child in content]
             if node.get("type") in ("paragraph", "heading", "listItem"):
