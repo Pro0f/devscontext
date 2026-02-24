@@ -136,7 +136,7 @@ No background processes. No vector database. Just on-demand fetching and synthes
 ## Development
 
 ```bash
-git clone https://github.com/anthropics/devscontext.git
+git clone https://github.com/Pro0f/devscontext.git
 cd devscontext
 pip install -e ".[dev]"
 

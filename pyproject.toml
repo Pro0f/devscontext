@@ -10,7 +10,7 @@ readme = "README.md"
 license = "MIT"
 requires-python = ">=3.11"
 authors = [
-    { name = "Your Name", email = "you@devscontext.com" },
+    { name = "DevsContext Contributors" },
 ]
 keywords = ["mcp", "ai", "context", "jira", "claude-code", "developer-tools"]
 classifiers = [
@@ -47,9 +47,9 @@ dev = [
 devscontext = "devscontext.cli:main"
 
 [project.urls]
-Homepage = "https://devscontext.com"
-Repository = "https://github.com/yourusername/devscontext"
-Documentation = "https://devscontext.com/docs"
+Homepage = "https://github.com/Pro0f/devscontext"
+Repository = "https://github.com/Pro0f/devscontext"
+Issues = "https://github.com/Pro0f/devscontext/issues"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/devscontext"]

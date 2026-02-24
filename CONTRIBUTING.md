@@ -3,7 +3,7 @@
 ## Development Setup
 
 ```bash
-git clone https://github.com/anthropics/devscontext.git
+git clone https://github.com/Pro0f/devscontext.git
 cd devscontext
 python -m venv venv
 source venv/bin/activate
