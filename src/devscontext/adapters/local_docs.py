@@ -23,7 +23,7 @@ from devscontext.constants import (
     SOURCE_TYPE_DOCUMENTATION,
 )
 from devscontext.logging import get_logger
-from devscontext.models import ContextData, DocSection, DocsContext
+from devscontext.models import ContextData, DocsContext, DocSection
 from devscontext.utils import extract_keywords, truncate_text
 
 if TYPE_CHECKING:
@@ -100,7 +100,12 @@ class LocalDocsAdapter(Adapter):
         path_parts = [p.lower() for p in file_path.parts]
         path_str = "/".join(path_parts)
 
-        if "adr" in path_parts or "adrs" in path_parts or "/adr/" in path_str or path_str.startswith("adr/"):
+        if (
+            "adr" in path_parts
+            or "adrs" in path_parts
+            or "/adr/" in path_str
+            or path_str.startswith("adr/")
+        ):
             return "adr"
         if "architecture" in path_parts or "arch" in path_parts:
             return "architecture"
@@ -279,10 +284,7 @@ class LocalDocsAdapter(Adapter):
             return True
 
         # Check content
-        if term_lower in section.content.lower():
-            return True
-
-        return False
+        return term_lower in section.content.lower()
 
     def _to_doc_section(self, section: ParsedSection) -> DocSection:
         """Convert a ParsedSection to a DocSection model.
@@ -433,6 +435,86 @@ class LocalDocsAdapter(Adapter):
             "Retrieved standards",
             extra={
                 "area": area,
+                "sections_found": len(result_sections),
+            },
+        )
+
+        return DocsContext(sections=result_sections)
+
+    async def list_standards_areas(self) -> list[str]:
+        """List available standards areas based on file names and section titles.
+
+        Returns:
+            List of area names (e.g., ["typescript", "testing", "error-handling"]).
+        """
+        if not self._config.enabled:
+            return []
+
+        md_files = self._scan_directories()
+        areas: set[str] = set()
+
+        for file_path in md_files:
+            parsed = self._parse_file(file_path)
+            if parsed and parsed.doc_type == "standards":
+                # Add filename (without extension) as an area
+                areas.add(file_path.stem.lower())
+
+        return sorted(areas)
+
+    async def search_docs(self, query: str, max_results: int = 10) -> DocsContext:
+        """Search local documentation by keywords.
+
+        Searches file names, section titles, and content for matching terms.
+
+        Args:
+            query: Search query string.
+            max_results: Maximum number of sections to return.
+
+        Returns:
+            DocsContext with matching sections.
+        """
+        if not self._config.enabled:
+            return DocsContext(sections=[])
+
+        # Extract keywords from query
+        keywords = extract_keywords(query)
+        if not keywords:
+            # If no keywords extracted, use the original query terms
+            keywords = [w.lower() for w in query.split() if len(w) >= 3]
+
+        if not keywords:
+            return DocsContext(sections=[])
+
+        md_files = self._scan_directories()
+        all_sections: list[ParsedSection] = []
+
+        # Parse all files
+        for file_path in md_files:
+            parsed = self._parse_file(file_path)
+            if parsed:
+                all_sections.extend(parsed.sections)
+
+        # Score sections by keyword matches
+        scored_sections: list[tuple[ParsedSection, int]] = []
+        for section in all_sections:
+            score = 0
+            for keyword in keywords:
+                if self._matches_term(section, keyword):
+                    score += 1
+            if score > 0:
+                scored_sections.append((section, score))
+
+        # Sort by score (highest first) and take top results
+        scored_sections.sort(key=lambda x: -x[1])
+        matched_sections = [s for s, _ in scored_sections[:max_results]]
+
+        result_sections = [self._to_doc_section(s) for s in matched_sections]
+
+        logger.info(
+            "Docs search completed",
+            extra={
+                "query": query,
+                "keywords": keywords,
                 "sections_found": len(result_sections),
             },
         )

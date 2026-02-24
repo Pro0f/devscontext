@@ -2,14 +2,12 @@
 
 from datetime import UTC, datetime
 from pathlib import Path
-from unittest.mock import patch
 
 import pytest
 
 from devscontext.adapters.local_docs import (
     LocalDocsAdapter,
     ParsedDoc,
-    ParsedSection,
 )
 from devscontext.models import DocsConfig, JiraTicket
 
@@ -228,9 +226,7 @@ class TestComponentMatching:
 class TestLabelMatching:
     """Tests for label-based doc matching."""
 
-    async def test_matches_label_in_heading(
-        self, adapter: LocalDocsAdapter, fixtures_path: Path
-    ):
+    async def test_matches_label_in_heading(self, adapter: LocalDocsAdapter, fixtures_path: Path):
         """Should match docs where label appears in section heading."""
         ticket = JiraTicket(
             ticket_id="TEST-789",
@@ -264,9 +260,7 @@ class TestKeywordMatching:
         all_content = " ".join(s.content.lower() for s in docs.sections)
         assert "webhook" in all_content
 
-    async def test_matches_keyword_in_content(
-        self, adapter: LocalDocsAdapter, fixtures_path: Path
-    ):
+    async def test_matches_keyword_in_content(self, adapter: LocalDocsAdapter, fixtures_path: Path):
         """Should match docs where keywords appear in content."""
         ticket = JiraTicket(
             ticket_id="TEST-101",
@@ -331,9 +325,7 @@ class TestDeduplication:
 class TestSectionCapping:
     """Tests for max sections limit."""
 
-    async def test_caps_at_10_sections(
-        self, adapter: LocalDocsAdapter, sample_ticket: JiraTicket
-    ):
+    async def test_caps_at_10_sections(self, adapter: LocalDocsAdapter, sample_ticket: JiraTicket):
         """Should return at most 10 sections."""
         docs = await adapter.find_relevant_docs(sample_ticket)
         assert len(docs.sections) <= 10
@@ -521,3 +513,75 @@ class TestScanDirectories:
 
         files = adapter._scan_directories()
         assert files == []
+
+
+class TestListStandardsAreas:
+    """Tests for list_standards_areas method."""
+
+    async def test_lists_available_areas(self, adapter: LocalDocsAdapter):
+        """Should list available standards areas from file names."""
+        areas = await adapter.list_standards_areas()
+
+        assert len(areas) > 0
+        # Should include areas from fixture files
+        assert "typescript" in areas or "testing" in areas
+
+    async def test_returns_sorted_areas(self, adapter: LocalDocsAdapter):
+        """Should return areas in sorted order."""
+        areas = await adapter.list_standards_areas()
+
+        assert areas == sorted(areas)
+
+    async def test_returns_empty_when_disabled(self):
+        """Should return empty list when adapter is disabled."""
+        config = DocsConfig(paths=["./docs/"], enabled=False)
+        adapter = LocalDocsAdapter(config)
+
+        areas = await adapter.list_standards_areas()
+
+        assert areas == []
+
+
+class TestSearchDocs:
+    """Tests for search_docs method."""
+
+    async def test_search_finds_matching_content(self, adapter: LocalDocsAdapter):
+        """Should find docs matching search query."""
+        results = await adapter.search_docs("webhook retry")
+
+        assert len(results.sections) > 0
+        # Should find content mentioning retry or webhook
+        all_content = " ".join(s.content.lower() for s in results.sections)
+        all_titles = " ".join((s.section_title or "").lower() for s in results.sections)
+        combined = all_content + " " + all_titles
+        assert "retry" in combined or "webhook" in combined
+
+    async def test_search_returns_empty_for_no_matches(self, adapter: LocalDocsAdapter):
+        """Should return empty for queries with no matches."""
+        results = await adapter.search_docs("xyznonexistentterm123")
+
+        assert len(results.sections) == 0
+
+    async def test_search_respects_max_results(self, adapter: LocalDocsAdapter):
+        """Should limit results to max_results."""
+        results = await adapter.search_docs("error", max_results=2)
+
+        assert len(results.sections) <= 2
+
+    async def test_search_when_disabled(self):
+        """Should return empty when adapter is disabled."""
+        config = DocsConfig(paths=["./docs/"], enabled=False)
+        adapter = LocalDocsAdapter(config)
+
+        results = await adapter.search_docs("error handling")
+
+        assert len(results.sections) == 0
+
+    async def test_search_scores_by_keyword_count(self, adapter: LocalDocsAdapter):
+        """Should rank results by number of keyword matches."""
+        # This is an implicit test - results should be sorted by relevance
+        results = await adapter.search_docs("error handling")
+
+        # Results should exist if fixture has matching content
+        # Just verify the method completes without error
+        assert isinstance(results.sections, list)

@@ -1,7 +1,5 @@
 """Tests for utility functions."""
 
-import pytest
-
 from devscontext.utils import extract_keywords, format_duration, truncate_text
 
 
@@ -133,7 +131,7 @@ class TestTruncateText:
         text = "This is a long sentence without any periods until the very end"
         result = truncate_text(text, 30)
         assert result.endswith("... [truncated]")
-        assert not result[:-len("... [truncated]")].endswith(" ")  # No trailing space
+        assert not result[: -len("... [truncated]")].endswith(" ")  # No trailing space
 
     def test_hard_cut_for_long_words(self):
         """Falls back to hard cut if no good boundary."""
