@@ -13,10 +13,23 @@ context block, and returns it through MCP.
 ## Architecture
 - MCP server using the official Python MCP SDK (`mcp` package)
 - On-demand fetching: no background processes, no vector DB, no daemons
-- Flow: MCP tool call -> fetch from APIs in parallel -> LLM synthesis -> return
 - Sources: Jira REST API, Fireflies GraphQL API, local markdown docs
 - Synthesis: LLM (Claude Haiku / GPT-4o-mini / Ollama) combines raw data into structured block
 - Cache: simple in-memory TTL cache, no persistent storage
+
+### Fetch Strategy (Two-Phase)
+For `get_task_context`, we use a two-phase fetch:
+1. **Phase 1:** Fetch Jira ticket first (need ticket data for doc/meeting matching)
+2. **Phase 2:** Fetch meetings and docs in parallel, using ticket title/components/labels
+   - Meetings: search by ticket ID AND keywords from ticket title
+   - Docs: match by components, labels, keywords; always include standards
+
+This ensures docs and meetings are contextually relevant to the specific ticket.
+
+### Tool Behaviors
+- `get_task_context`: Full LLM synthesis, cached
+- `search_context`: No LLM, no cache (fast freeform search)
+- `get_standards`: No LLM, no cache (direct doc retrieval)
 
 ## Tech Stack
 - Python 3.11+
@@ -45,6 +58,7 @@ context block, and returns it through MCP.
 - `src/devscontext/cache.py` - in-memory TTL cache
 - `src/devscontext/config.py` - YAML config loading and validation
 - `src/devscontext/cli.py` - CLI commands (init, test, serve)
+- `src/devscontext/utils.py` - text utilities (keyword extraction, truncation)
 
 ## MCP Tools (3 total)
 1. `get_task_context(task_id: str)` - full synthesized context for a Jira ticket
@@ -58,6 +72,19 @@ context block, and returns it through MCP.
 - Config via `.devscontext.yaml` in project root
 - Auth credentials via environment variables only (never in config file)
 - Graceful degradation: if Fireflies is not configured, skip it and return Jira + docs only
+
+### Local Docs Matching
+Local docs are matched to tickets via:
+1. Components → doc filenames and headings
+2. Labels → doc filenames and headings
+3. Keywords from ticket title → doc content
+4. Standards docs (CLAUDE.md, .cursorrules, standards/) are always included
+
+Docs are classified by path:
+- `architecture/`, `arch/` → architecture docs
+- `standards/`, `style/`, `coding/` → coding standards
+- `adr/`, `adrs/` → architecture decision records
+- `CLAUDE.md`, `.cursorrules` → standards (special files)
 
 ## Testing
 - Use pytest with pytest-asyncio
