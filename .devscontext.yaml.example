@@ -1,32 +1,29 @@
 # DevsContext Configuration
-# Copy this file to .devscontext.yaml and configure for your environment
+# Copy this file to .devscontext.yaml and configure your adapters.
+# API tokens should be set via environment variables for security.
 
 adapters:
-  # Jira integration for fetching ticket details
   jira:
-    enabled: false
+    enabled: true
     base_url: "https://your-company.atlassian.net"
-    email: "your-email@company.com"
-    # Use environment variable for API token:
-    # export JIRA_API_TOKEN="your-api-token"
+    email: "${JIRA_EMAIL}"
     api_token: "${JIRA_API_TOKEN}"
 
-  # Fireflies.ai for meeting transcripts
   fireflies:
     enabled: false
-    # Use environment variable for API key:
-    # export FIREFLIES_API_KEY="your-api-key"
     api_key: "${FIREFLIES_API_KEY}"
 
-  # Local documentation directories
   local_docs:
     enabled: true
     paths:
       - "./docs"
-      - "./architecture"
-      # Add more paths as needed
+      - "./CLAUDE.md"
 
-# Cache settings
+synthesis:
+  provider: "anthropic"  # anthropic, openai, or ollama
+  model: "claude-3-haiku-20240307"
+  # api_key: "${ANTHROPIC_API_KEY}"  # Uses ANTHROPIC_API_KEY env var by default
+
 cache:
-  ttl_seconds: 300  # 5 minutes
-  max_size: 100     # Maximum cached items
+  ttl_seconds: 300
+  max_size: 100
