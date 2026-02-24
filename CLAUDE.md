@@ -1,3 +1,5 @@
+**IMPORTANT: DevsContext is the product we are building. The payments-service, PROJ-1234, webhook examples, and other sample data in docs/example/ and tests/fixtures/ are SAMPLE DATA for testing — do NOT implement them. We are building the MCP server tool, not the example application.**
+
 # DevsContext
 
 ## What is this?

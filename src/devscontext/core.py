@@ -25,8 +25,9 @@ from typing import TYPE_CHECKING
 from devscontext.adapters import FirefliesAdapter, JiraAdapter, LocalDocsAdapter
 from devscontext.cache import SimpleCache
 from devscontext.logging import get_logger
-from devscontext.models import DocsContext, JiraContext, MeetingContext, TaskContext
+from devscontext.models import DocsContext, JiraContext, JiraTicket, MeetingContext, TaskContext
 from devscontext.synthesis import SynthesisEngine
+from devscontext.utils import extract_keywords
 
 if TYPE_CHECKING:
     from devscontext.models import DevsContextConfig
@@ -193,7 +194,10 @@ class DevsContextCore:
         self,
         task_id: str,
     ) -> tuple[JiraContext | None, MeetingContext | None, DocsContext | None]:
-        """Fetch context from all adapters in parallel.
+        """Fetch context from all adapters.
+
+        Strategy: Fetch Jira FIRST to get ticket data, then fetch meetings + docs
+        in parallel (both benefit from ticket data for better matching).
 
         Args:
             task_id: The task identifier.
@@ -201,23 +205,25 @@ class DevsContextCore:
         Returns:
             Tuple of (JiraContext, MeetingContext, DocsContext), each may be None.
         """
-        # Build list of coroutines for enabled adapters
-        jira_coro = self._fetch_jira_context(task_id)
-        meeting_coro = self._fetch_meeting_context(task_id)
-        docs_coro = self._fetch_docs_context(task_id)
+        # Step 1: Fetch Jira first - we need ticket data for doc/meeting matching
+        jira_result: JiraContext | None = None
+        ticket: JiraTicket | None = None
 
-        # Run all in parallel
-        results = await asyncio.gather(jira_coro, meeting_coro, docs_coro, return_exceptions=True)
+        try:
+            jira_result = await self._fetch_jira_context(task_id)
+            if jira_result:
+                ticket = jira_result.ticket
+        except Exception as e:
+            logger.warning("Jira fetch failed", extra={"error": str(e), "task_id": task_id})
 
-        raw_jira, raw_meeting, raw_docs = results
+        # Step 2: Fetch meetings and docs in parallel, passing ticket data
+        meeting_coro = self._fetch_meeting_context(task_id, ticket)
+        docs_coro = self._fetch_docs_context(task_id, ticket)
+
+        results = await asyncio.gather(meeting_coro, docs_coro, return_exceptions=True)
+        raw_meeting, raw_docs = results
 
         # Handle any exceptions with proper type narrowing
-        jira_result: JiraContext | None = None
-        if isinstance(raw_jira, BaseException):
-            logger.warning("Jira fetch failed", extra={"error": str(raw_jira), "task_id": task_id})
-        elif isinstance(raw_jira, JiraContext):
-            jira_result = raw_jira
-
         meeting_result: MeetingContext | None = None
         if isinstance(raw_meeting, BaseException):
             logger.warning(
@@ -245,19 +251,84 @@ class DevsContextCore:
             return None
         return await jira.get_jira_context(task_id)
 
-    async def _fetch_meeting_context(self, task_id: str) -> MeetingContext | None:
-        """Fetch meeting context for a task."""
+    async def _fetch_meeting_context(
+        self,
+        task_id: str,
+        ticket: JiraTicket | None = None,
+    ) -> MeetingContext | None:
+        """Fetch meeting context for a task.
+
+        Searches by task_id first, then also by title keywords if ticket is available.
+
+        Args:
+            task_id: The task identifier.
+            ticket: Optional Jira ticket for keyword-enriched search.
+
+        Returns:
+            MeetingContext with relevant meeting excerpts.
+        """
         fireflies = self._get_fireflies()
         if fireflies is None:
             return None
-        return await fireflies.get_meeting_context(task_id)
 
-    async def _fetch_docs_context(self, task_id: str) -> DocsContext | None:
-        """Fetch documentation context for a task."""
+        # Always search by task_id
+        context = await fireflies.get_meeting_context(task_id)
+
+        # If we have ticket data, also search by title keywords
+        if ticket and ticket.title:
+            keywords = extract_keywords(ticket.title)
+            if keywords:
+                # Search by top 3 keywords joined
+                keyword_query = " ".join(keywords[:3])
+                additional = await fireflies.get_meeting_context(keyword_query)
+
+                # Merge results, avoiding duplicates by meeting title + date
+                if additional and additional.meetings:
+                    existing_keys = {
+                        (m.meeting_title, m.meeting_date.date())
+                        for m in (context.meetings if context else [])
+                    }
+                    for meeting in additional.meetings:
+                        key = (meeting.meeting_title, meeting.meeting_date.date())
+                        if key not in existing_keys:
+                            if context is None:
+                                context = MeetingContext(meetings=[])
+                            context.meetings.append(meeting)
+                            existing_keys.add(key)
+
+        return context
+
+    async def _fetch_docs_context(
+        self,
+        task_id: str,
+        ticket: JiraTicket | None = None,
+    ) -> DocsContext | None:
+        """Fetch documentation context for a task.
+
+        If ticket data is available, uses component/label/keyword matching.
+        Otherwise falls back to returning general standards only.
+
+        Args:
+            task_id: The task identifier.
+            ticket: Optional Jira ticket for targeted doc matching.
+
+        Returns:
+            DocsContext with relevant documentation sections.
+        """
         docs = self._get_docs()
         if docs is None:
             return None
-        return await docs.get_docs_context(task_id)
+
+        if ticket:
+            # Use ticket data for targeted matching
+            return await docs.find_relevant_docs(ticket)
+        else:
+            # Fallback: return general standards when no ticket data
+            logger.info(
+                "No ticket data available, falling back to general standards",
+                extra={"task_id": task_id},
+            )
+            return await docs.get_standards()
 
     async def health_check(self) -> dict[str, bool]:
         """Check health of all configured adapters.
@@ -356,29 +427,61 @@ This will search across:
             "duration_ms": duration_ms,
         }
 
-    async def get_standards(self, area: str | None = None) -> dict[str, str | None]:
+    async def get_standards(self, area: str | None = None) -> dict[str, str | None | int]:
         """Get coding standards from local documentation.
 
         Args:
             area: Optional area to filter (e.g., 'typescript', 'testing').
 
         Returns:
-            Dictionary containing standards content.
+            Dictionary containing standards content and metadata.
         """
         start_time = time.monotonic()
         logger.info("Get standards", extra={"area": area})
 
+        docs = self._get_docs()
+        if docs is None:
+            content = self._get_standards_not_configured_message(area)
+            section_count = 0
+        else:
+            docs_context = await docs.get_standards(area)
+            if docs_context.sections:
+                # Format sections into markdown
+                parts: list[str] = []
+                for section in docs_context.sections:
+                    if section.section_title:
+                        parts.append(f"## {section.section_title}\n\n{section.content}")
+                    else:
+                        parts.append(section.content)
+                content = "\n\n---\n\n".join(parts)
+                section_count = len(docs_context.sections)
+            else:
+                content = self._get_standards_not_configured_message(area)
+                section_count = 0
+
+        duration_ms = int((time.monotonic() - start_time) * 1000)
+        logger.info(
+            "Get standards completed",
+            extra={"area": area, "duration_ms": duration_ms, "section_count": section_count},
+        )
+
+        return {
+            "area": area,
+            "content": content,
+            "section_count": section_count,
+        }
+
+    def _get_standards_not_configured_message(self, area: str | None) -> str:
+        """Generate message when no standards are configured."""
         area_filter = f" for {area}" if area else ""
+        return f"""## Coding Standards{area_filter}
 
-        # TODO: Implement real standards lookup from docs adapter
-        content = f"""## Coding Standards{area_filter}
-
-No standards documents configured yet.
+No standards documents found.
 
 To add standards:
 1. Create markdown files in your docs directory
 2. Configure `sources.docs.paths` in .devscontext.yaml
-3. Name files like `standards-typescript.md`, `standards-testing.md`, etc.
+3. Place files in a `standards/` subdirectory
 
 Example structure:
 ```
@@ -389,14 +492,6 @@ docs/
     api-design.md
 ```
 """
-
-        duration_ms = int((time.monotonic() - start_time) * 1000)
-        logger.info("Get standards completed", extra={"area": area, "duration_ms": duration_ms})
-
-        return {
-            "area": area,
-            "content": content,
-        }
 
     async def close(self) -> None:
         """Close all adapter connections."""

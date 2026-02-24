@@ -329,21 +329,22 @@ class TestRawDataFormatting:
         assert "PKCE" in result
         assert "Alice Chen" in result
 
-    def test_format_docs_context(
+    def test_format_docs_context_split_by_type(
         self,
         synthesis_engine: SynthesisEngine,
         docs_context: DocsContext,
     ) -> None:
-        """Test docs context formatting."""
-        result = synthesis_engine._format_docs_context(docs_context)
+        """Test docs context formatting splits by doc type."""
+        # Test architecture docs
+        arch_result = synthesis_engine._format_architecture_docs(docs_context)
+        assert "## ARCHITECTURE DOCS" in arch_result
+        assert "**Source:**" in arch_result
+        assert "auth-service" in arch_result
 
-        # Check structure
-        assert "## LOCAL DOCUMENTATION" in result
-        assert "**Source:**" in result
-
-        # Check content
-        assert "auth-service" in result
-        assert "PKCE" in result
+        # Test coding standards
+        standards_result = synthesis_engine._format_coding_standards(docs_context)
+        assert "## CODING STANDARDS" in standards_result
+        assert "PKCE" in standards_result
 
 
 class TestEdgeCases:

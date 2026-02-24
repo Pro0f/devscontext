@@ -211,26 +211,47 @@ class TestSynthesisEngine:
 
         assert result == ""
 
-    def test_format_docs_context(
+    def test_format_coding_standards(
         self,
         synthesis_engine: SynthesisEngine,
         sample_docs_context: DocsContext,
     ) -> None:
-        """Test docs context formatting."""
-        result = synthesis_engine._format_docs_context(sample_docs_context)
+        """Test coding standards formatting."""
+        result = synthesis_engine._format_coding_standards(sample_docs_context)
 
         assert "Authentication Guide" in result
         assert "docs/auth.md" in result
         assert "AuthMiddleware" in result
 
-    def test_format_docs_context_empty(
+    def test_format_coding_standards_empty(
         self,
         synthesis_engine: SynthesisEngine,
     ) -> None:
-        """Test docs context formatting with empty sections."""
-        result = synthesis_engine._format_docs_context(DocsContext())
+        """Test coding standards formatting with empty sections."""
+        result = synthesis_engine._format_coding_standards(DocsContext())
 
         assert result == ""
+
+    def test_format_architecture_docs(
+        self,
+        synthesis_engine: SynthesisEngine,
+    ) -> None:
+        """Test architecture docs formatting."""
+        docs_context = DocsContext(
+            sections=[
+                DocSection(
+                    file_path="docs/architecture/payments.md",
+                    section_title="Webhook Flow",
+                    content="Webhooks are processed via SQS queue.",
+                    doc_type="architecture",
+                ),
+            ]
+        )
+        result = synthesis_engine._format_architecture_docs(docs_context)
+
+        assert "ARCHITECTURE DOCS" in result
+        assert "Webhook Flow" in result
+        assert "SQS queue" in result
 
     def test_build_raw_data_combines_all_sources(
         self,
@@ -248,7 +269,7 @@ class TestSynthesisEngine:
 
         assert "JIRA TICKET" in result
         assert "MEETING TRANSCRIPTS" in result
-        assert "LOCAL DOCUMENTATION" in result
+        assert "CODING STANDARDS" in result  # standards doc_type maps here
         assert "PROJ-123" in result
 
     def test_build_raw_data_empty_context(

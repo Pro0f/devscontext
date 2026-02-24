@@ -64,8 +64,39 @@ Rules:
 - If sources conflict, note the conflict explicitly.
 - Extract acceptance criteria clearly as a checklist if available.
 - For decisions from meetings, include WHO decided and WHEN.
-- For architecture, focus on file paths, patterns, and integration points.
 - Do NOT include generic advice. Only include specific, actionable context.
+
+Section-specific guidance:
+
+### Requirements
+- Extract from Jira ticket description and acceptance criteria
+- Present as numbered list or checklist
+- Include any constraints mentioned in comments
+
+### Key Decisions
+- Extract from meeting transcripts and ticket comments
+- Include WHO made the decision, WHEN, and WHY
+- Focus on technical decisions that affect implementation
+
+### Architecture Context
+- Focus on ACTIONABLE details from architecture docs:
+  - Exact file paths where code should be added/modified
+  - Data flow and integration points
+  - Database tables and schemas involved
+  - Queue names, API endpoints, external services
+- Do NOT include general architectural overview
+
+### Coding Standards
+- Extract SPECIFIC rules that apply to this task:
+  - Error handling patterns (e.g., "use Result<T,E>, don't throw")
+  - Naming conventions for this codebase
+  - Testing requirements (what needs tests, mocking strategy)
+  - Async patterns to follow
+- Do NOT include generic advice like "write clean code"
+
+### Related Work
+- Linked tickets and their status
+- Similar past implementations to reference
 
 Raw data:
 ---
@@ -325,17 +356,53 @@ class SynthesisEngine:
 
         return "\n".join(parts)
 
-    def _format_docs_context(self, ctx: DocsContext) -> str:
-        """Format documentation context as raw data for the prompt."""
-        if not ctx.sections:
+    def _format_architecture_docs(self, ctx: DocsContext) -> str:
+        """Format architecture documentation as raw data for the prompt."""
+        arch_sections = [s for s in ctx.sections if s.doc_type == "architecture"]
+        if not arch_sections:
             return ""
 
-        parts = ["## LOCAL DOCUMENTATION"]
+        parts = ["## ARCHITECTURE DOCS"]
+        parts.append("*Focus on file paths, data flow, integration points, and infrastructure.*\n")
 
-        for section in ctx.sections:
+        for section in arch_sections:
             title = section.section_title or section.file_path
             parts.append(f"\n### {title}")
-            parts.append(f"**Source:** {section.file_path} ({section.doc_type})")
+            parts.append(f"**Source:** {section.file_path}")
+            parts.append(f"\n{section.content}")
+
+        return "\n".join(parts)
+
+    def _format_coding_standards(self, ctx: DocsContext) -> str:
+        """Format coding standards as raw data for the prompt."""
+        standards_sections = [s for s in ctx.sections if s.doc_type == "standards"]
+        if not standards_sections:
+            return ""
+
+        parts = ["## CODING STANDARDS"]
+        parts.append("*Specific rules and patterns to follow in this codebase.*\n")
+
+        for section in standards_sections:
+            title = section.section_title or section.file_path
+            parts.append(f"\n### {title}")
+            parts.append(f"**Source:** {section.file_path}")
+            parts.append(f"\n{section.content}")
+
+        return "\n".join(parts)
+
+    def _format_other_docs(self, ctx: DocsContext) -> str:
+        """Format ADRs and other documentation as raw data for the prompt."""
+        other_sections = [s for s in ctx.sections if s.doc_type in ("adr", "other")]
+        if not other_sections:
+            return ""
+
+        parts = ["## OTHER DOCUMENTATION"]
+
+        for section in other_sections:
+            doc_type_label = "ADR" if section.doc_type == "adr" else "Doc"
+            title = section.section_title or section.file_path
+            parts.append(f"\n### [{doc_type_label}] {title}")
+            parts.append(f"**Source:** {section.file_path}")
             parts.append(f"\n{section.content}")
 
         return "\n".join(parts)
@@ -358,14 +425,30 @@ class SynthesisEngine:
         """
         sections: list[str] = []
 
+        # Jira ticket data
         if jira_context and jira_context.ticket:
             sections.append(self._format_jira_context(jira_context))
 
+        # Meeting transcripts
         if meeting_context and meeting_context.meetings:
             sections.append(self._format_meeting_context(meeting_context))
 
+        # Documentation - split by type for better synthesis
         if docs_context and docs_context.sections:
-            sections.append(self._format_docs_context(docs_context))
+            # Architecture docs (file paths, data flow, infrastructure)
+            arch_docs = self._format_architecture_docs(docs_context)
+            if arch_docs:
+                sections.append(arch_docs)
+
+            # Coding standards (patterns, rules, conventions)
+            standards = self._format_coding_standards(docs_context)
+            if standards:
+                sections.append(standards)
+
+            # ADRs and other docs
+            other_docs = self._format_other_docs(docs_context)
+            if other_docs:
+                sections.append(other_docs)
 
         if not sections:
             return "No context data available."
