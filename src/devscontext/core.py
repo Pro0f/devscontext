@@ -4,10 +4,14 @@ This module contains the DevsContextCore class which coordinates
 fetching context from multiple adapters, synthesizing the results
 with an LLM, and caching for performance.
 
+Uses the plugin registry for adapter and synthesis plugin management,
+supporting the primary/secondary source fetch strategy.
+
 Example:
     config = DevsContextConfig(
         sources=SourcesConfig(
-            jira=JiraConfig(enabled=True, base_url="https://..."),
+            jira=JiraConfig(enabled=True, base_url="https://...", primary=True),
+            docs=DocsConfig(enabled=True, primary=False),
         ),
         synthesis=SynthesisConfig(provider="anthropic"),
     )
@@ -22,12 +26,11 @@ import time
 from datetime import UTC, datetime
 from typing import TYPE_CHECKING
 
-from devscontext.adapters import FirefliesAdapter, JiraAdapter, LocalDocsAdapter
 from devscontext.cache import SimpleCache
 from devscontext.logging import get_logger
 from devscontext.models import DocsContext, JiraContext, JiraTicket, MeetingContext, TaskContext
-from devscontext.synthesis import SynthesisEngine
-from devscontext.utils import extract_keywords
+from devscontext.plugins.base import SourceContext
+from devscontext.plugins.registry import PluginRegistry
 
 if TYPE_CHECKING:
     from devscontext.models import DevsContextConfig
@@ -39,11 +42,13 @@ class DevsContextCore:
     """Core orchestration for fetching and synthesizing engineering context.
 
     This class coordinates:
-        - Fetching context from Jira, Fireflies, and local docs in parallel
-        - Synthesizing raw context into structured markdown via LLM
+        - Fetching context from adapters using the plugin registry
+        - Primary adapters are fetched first (e.g., Jira)
+        - Secondary adapters are fetched in parallel using primary context
+        - Synthesizing raw context into structured markdown via synthesis plugins
         - Caching results to avoid redundant API calls
 
-    Adapters are initialized lazily on first use.
+    Uses PluginRegistry for managing adapters and synthesis plugins.
     """
 
     def __init__(self, config: DevsContextConfig) -> None:
@@ -62,47 +67,22 @@ class DevsContextCore:
                 max_size=config.cache.max_size,
             )
 
-        # Lazy-initialized adapters
-        self._jira: JiraAdapter | None = None
-        self._fireflies: FirefliesAdapter | None = None
-        self._docs: LocalDocsAdapter | None = None
-
-        # Lazy-initialized synthesis engine
-        self._synthesis: SynthesisEngine | None = None
+        # Initialize plugin registry
+        self._registry = PluginRegistry()
+        self._registry.register_builtin_plugins()
+        self._registry.discover_plugins()
+        self._registry.load_from_config(config)
 
         logger.info(
             "DevsContextCore initialized",
             extra={
                 "cache_enabled": config.cache.enabled,
-                "jira_enabled": config.sources.jira.enabled,
-                "fireflies_enabled": config.sources.fireflies.enabled,
-                "docs_enabled": config.sources.docs.enabled,
+                "adapters_loaded": list(self._registry.get_active_adapters().keys()),
+                "synthesis_plugin": (
+                    self._registry.get_synthesis().name if self._registry.get_synthesis() else None
+                ),
             },
         )
-
-    def _get_jira(self) -> JiraAdapter | None:
-        """Get or create the Jira adapter (lazy initialization)."""
-        if self._jira is None and self._config.sources.jira.enabled:
-            self._jira = JiraAdapter(self._config.sources.jira)
-        return self._jira
-
-    def _get_fireflies(self) -> FirefliesAdapter | None:
-        """Get or create the Fireflies adapter (lazy initialization)."""
-        if self._fireflies is None and self._config.sources.fireflies.enabled:
-            self._fireflies = FirefliesAdapter(self._config.sources.fireflies)
-        return self._fireflies
-
-    def _get_docs(self) -> LocalDocsAdapter | None:
-        """Get or create the local docs adapter (lazy initialization)."""
-        if self._docs is None and self._config.sources.docs.enabled:
-            self._docs = LocalDocsAdapter(self._config.sources.docs)
-        return self._docs
-
-    def _get_synthesis(self) -> SynthesisEngine:
-        """Get or create the synthesis engine (lazy initialization)."""
-        if self._synthesis is None:
-            self._synthesis = SynthesisEngine(self._config.synthesis)
-        return self._synthesis
 
     async def get_task_context(
         self,
@@ -141,28 +121,34 @@ class DevsContextCore:
                         cached=True,
                     )
 
-        # Fetch context from adapters in parallel
-        jira_context, meeting_context, docs_context = await self._fetch_all_context(task_id)
+        # Fetch context from adapters using new plugin interface
+        source_contexts = await self._fetch_all_context(task_id)
 
-        # Build sources list
+        # Build sources list from source contexts
         sources_used: list[str] = []
-        if jira_context and jira_context.ticket:
-            sources_used.append(f"jira:{jira_context.ticket.ticket_id}")
-        if meeting_context and meeting_context.meetings:
-            sources_used.extend(
-                f"fireflies:{m.meeting_date.strftime('%Y-%m-%d')}" for m in meeting_context.meetings
-            )
-        if docs_context and docs_context.sections:
-            sources_used.extend(f"docs:{s.file_path}" for s in docs_context.sections)
+        for name, ctx in source_contexts.items():
+            if ctx.is_empty():
+                continue
 
-        # Synthesize with LLM
-        synthesis_engine = self._get_synthesis()
-        synthesized = await synthesis_engine.synthesize(
-            task_id=task_id,
-            jira_context=jira_context,
-            meeting_context=meeting_context,
-            docs_context=docs_context,
-        )
+            if name == "jira" and isinstance(ctx.data, JiraContext):
+                sources_used.append(f"jira:{ctx.data.ticket.ticket_id}")
+            elif name == "fireflies" and isinstance(ctx.data, MeetingContext):
+                sources_used.extend(
+                    f"fireflies:{m.meeting_date.strftime('%Y-%m-%d')}"
+                    for m in ctx.data.meetings
+                )
+            elif name == "local_docs" and isinstance(ctx.data, DocsContext):
+                sources_used.extend(f"docs:{s.file_path}" for s in ctx.data.sections)
+
+        # Synthesize using plugin interface
+        synthesis = self._registry.get_synthesis()
+        if synthesis is None:
+            synthesized = f"## Task: {task_id}\n\nNo synthesis plugin configured."
+        else:
+            synthesized = await synthesis.synthesize(
+                task_id=task_id,
+                source_contexts=source_contexts,
+            )
 
         duration_ms = int((time.monotonic() - start_time) * 1000)
 
@@ -193,142 +179,66 @@ class DevsContextCore:
     async def _fetch_all_context(
         self,
         task_id: str,
-    ) -> tuple[JiraContext | None, MeetingContext | None, DocsContext | None]:
-        """Fetch context from all adapters.
+    ) -> dict[str, SourceContext]:
+        """Fetch context from all adapters using the plugin interface.
 
-        Strategy: Fetch Jira FIRST to get ticket data, then fetch meetings + docs
-        in parallel (both benefit from ticket data for better matching).
+        Uses two-phase fetch strategy:
+        1. Fetch from primary adapters first (typically Jira)
+        2. Fetch from secondary adapters in parallel, passing primary context
+
+        This allows secondary adapters (docs, meetings) to use ticket data
+        for better context matching (components, labels, keywords).
 
         Args:
             task_id: The task identifier.
 
         Returns:
-            Tuple of (JiraContext, MeetingContext, DocsContext), each may be None.
+            Dict mapping adapter names to their SourceContext.
         """
-        # Step 1: Fetch Jira first - we need ticket data for doc/meeting matching
-        jira_result: JiraContext | None = None
+        source_contexts: dict[str, SourceContext] = {}
+
+        # Phase 1: Fetch from primary adapters (typically Jira)
+        # Primary adapters are fetched first, their context is shared with secondary
         ticket: JiraTicket | None = None
+        primary_adapters = self._registry.get_primary_adapters()
 
-        try:
-            jira_result = await self._fetch_jira_context(task_id)
-            if jira_result:
-                ticket = jira_result.ticket
-        except Exception as e:
-            logger.warning("Jira fetch failed", extra={"error": str(e), "task_id": task_id})
+        for name, adapter in primary_adapters.items():
+            try:
+                ctx = await adapter.fetch_task_context(task_id)
+                source_contexts[name] = ctx
+                # Extract Jira ticket if available for secondary adapters
+                if isinstance(ctx.data, JiraContext):
+                    ticket = ctx.data.ticket
+            except Exception as e:
+                logger.warning(
+                    f"Primary adapter {name} fetch failed",
+                    extra={"error": str(e), "task_id": task_id},
+                )
 
-        # Step 2: Fetch meetings and docs in parallel, passing ticket data
-        meeting_coro = self._fetch_meeting_context(task_id, ticket)
-        docs_coro = self._fetch_docs_context(task_id, ticket)
+        # Phase 2: Fetch from secondary adapters in parallel
+        # Pass ticket data for context-aware matching
+        secondary_adapters = self._registry.get_secondary_adapters()
 
-        results = await asyncio.gather(meeting_coro, docs_coro, return_exceptions=True)
-        raw_meeting, raw_docs = results
+        if secondary_adapters:
+            coros = []
+            adapter_names = []
 
-        # Handle any exceptions with proper type narrowing
-        meeting_result: MeetingContext | None = None
-        if isinstance(raw_meeting, BaseException):
-            logger.warning(
-                "Fireflies fetch failed",
-                extra={"error": str(raw_meeting), "task_id": task_id},
-            )
-        elif isinstance(raw_meeting, MeetingContext):
-            meeting_result = raw_meeting
+            for name, adapter in secondary_adapters.items():
+                coros.append(adapter.fetch_task_context(task_id, ticket))
+                adapter_names.append(name)
 
-        docs_result: DocsContext | None = None
-        if isinstance(raw_docs, BaseException):
-            logger.warning(
-                "Docs fetch failed",
-                extra={"error": str(raw_docs), "task_id": task_id},
-            )
-        elif isinstance(raw_docs, DocsContext):
-            docs_result = raw_docs
+            results = await asyncio.gather(*coros, return_exceptions=True)
 
-        return jira_result, meeting_result, docs_result
+            for name, result in zip(adapter_names, results, strict=True):
+                if isinstance(result, BaseException):
+                    logger.warning(
+                        f"Secondary adapter {name} fetch failed",
+                        extra={"error": str(result), "task_id": task_id},
+                    )
+                elif isinstance(result, SourceContext):
+                    source_contexts[name] = result
 
-    async def _fetch_jira_context(self, task_id: str) -> JiraContext | None:
-        """Fetch Jira context for a task."""
-        jira = self._get_jira()
-        if jira is None:
-            return None
-        return await jira.get_jira_context(task_id)
-
-    async def _fetch_meeting_context(
-        self,
-        task_id: str,
-        ticket: JiraTicket | None = None,
-    ) -> MeetingContext | None:
-        """Fetch meeting context for a task.
-
-        Searches by task_id first, then also by title keywords if ticket is available.
-
-        Args:
-            task_id: The task identifier.
-            ticket: Optional Jira ticket for keyword-enriched search.
-
-        Returns:
-            MeetingContext with relevant meeting excerpts.
-        """
-        fireflies = self._get_fireflies()
-        if fireflies is None:
-            return None
-
-        # Always search by task_id
-        context = await fireflies.get_meeting_context(task_id)
-
-        # If we have ticket data, also search by title keywords
-        if ticket and ticket.title:
-            keywords = extract_keywords(ticket.title)
-            if keywords:
-                # Search by top 3 keywords joined
-                keyword_query = " ".join(keywords[:3])
-                additional = await fireflies.get_meeting_context(keyword_query)
-
-                # Merge results, avoiding duplicates by meeting title + date
-                if additional and additional.meetings:
-                    existing_keys = {
-                        (m.meeting_title, m.meeting_date.date())
-                        for m in (context.meetings if context else [])
-                    }
-                    for meeting in additional.meetings:
-                        key = (meeting.meeting_title, meeting.meeting_date.date())
-                        if key not in existing_keys:
-                            if context is None:
-                                context = MeetingContext(meetings=[])
-                            context.meetings.append(meeting)
-                            existing_keys.add(key)
-
-        return context
-
-    async def _fetch_docs_context(
-        self,
-        task_id: str,
-        ticket: JiraTicket | None = None,
-    ) -> DocsContext | None:
-        """Fetch documentation context for a task.
-
-        If ticket data is available, uses component/label/keyword matching.
-        Otherwise falls back to returning general standards only.
-
-        Args:
-            task_id: The task identifier.
-            ticket: Optional Jira ticket for targeted doc matching.
-
-        Returns:
-            DocsContext with relevant documentation sections.
-        """
-        docs = self._get_docs()
-        if docs is None:
-            return None
-
-        if ticket:
-            # Use ticket data for targeted matching
-            return await docs.find_relevant_docs(ticket)
-        else:
-            # Fallback: return general standards when no ticket data
-            logger.info(
-                "No ticket data available, falling back to general standards",
-                extra={"task_id": task_id},
-            )
-            return await docs.get_standards()
+        return source_contexts
 
     async def health_check(self) -> dict[str, bool]:
         """Check health of all configured adapters.
@@ -336,33 +246,7 @@ class DevsContextCore:
         Returns:
             Dictionary mapping adapter names to health status.
         """
-        results: dict[str, bool] = {}
-
-        # Check each adapter if configured
-        jira = self._get_jira()
-        if jira is not None:
-            try:
-                results["jira"] = await jira.health_check()
-            except Exception as e:
-                logger.warning("Jira health check failed", extra={"error": str(e)})
-                results["jira"] = False
-
-        fireflies = self._get_fireflies()
-        if fireflies is not None:
-            try:
-                results["fireflies"] = await fireflies.health_check()
-            except Exception as e:
-                logger.warning("Fireflies health check failed", extra={"error": str(e)})
-                results["fireflies"] = False
-
-        docs = self._get_docs()
-        if docs is not None:
-            try:
-                results["docs"] = await docs.health_check()
-            except Exception as e:
-                logger.warning("Docs health check failed", extra={"error": str(e)})
-                results["docs"] = False
-
+        results = await self._registry.health_check_all()
         logger.info("Health check completed", extra={"adapters": results})
         return results
 
@@ -464,21 +348,21 @@ class DevsContextCore:
 
     async def _search_jira(self, query: str) -> list[JiraTicket]:
         """Search Jira for matching issues."""
-        jira = self._get_jira()
+        jira = self._registry.get_adapter("jira")
         if jira is None:
             return []
         return await jira.search_issues(query, max_results=5)
 
     async def _search_meetings(self, query: str) -> MeetingContext:
         """Search meeting transcripts for query."""
-        fireflies = self._get_fireflies()
+        fireflies = self._registry.get_adapter("fireflies")
         if fireflies is None:
             return MeetingContext(meetings=[])
         return await fireflies.get_meeting_context(query)
 
     async def _search_docs(self, query: str) -> DocsContext:
         """Search local documentation for query."""
-        docs = self._get_docs()
+        docs = self._registry.get_adapter("local_docs")
         if docs is None:
             return DocsContext(sections=[])
         return await docs.search_docs(query, max_results=5)
@@ -534,7 +418,7 @@ class DevsContextCore:
         start_time = time.monotonic()
         logger.info("Get standards", extra={"area": area})
 
-        docs = self._get_docs()
+        docs = self._registry.get_adapter("local_docs")
         available_areas: list[str] = []
 
         if docs is None:
@@ -637,9 +521,5 @@ Try one of the areas above, or omit the area parameter to see all standards.
 """
 
     async def close(self) -> None:
-        """Close all adapter connections."""
-        if self._jira is not None:
-            await self._jira.close()
-        if self._fireflies is not None:
-            await self._fireflies.close()
-        # LocalDocsAdapter doesn't have async resources to close
+        """Close all adapter connections and clean up resources."""
+        await self._registry.close_all()

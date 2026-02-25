@@ -4,10 +4,12 @@ This adapter connects to the Jira REST API (v3) to fetch ticket details,
 comments, and linked issues. It handles Atlassian Document Format (ADF)
 conversion and assembles all data into a structured context block.
 
+This adapter implements the SourcePlugin interface for the plugin system.
+
 Example:
     config = JiraConfig(base_url="https://company.atlassian.net", ...)
     adapter = JiraAdapter(config)
-    context = await adapter.fetch_context("PROJ-123")
+    context = await adapter.fetch_task_context("PROJ-123")
 """
 
 from __future__ import annotations
@@ -15,11 +17,10 @@ from __future__ import annotations
 import asyncio
 import time
 from datetime import UTC, datetime
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, ClassVar
 
 import httpx
 
-from devscontext.adapters.base import Adapter
 from devscontext.constants import (
     ADAPTER_JIRA,
     DEFAULT_HTTP_TIMEOUT_SECONDS,
@@ -32,34 +33,44 @@ from devscontext.logging import get_logger
 from devscontext.models import (
     ContextData,
     JiraComment,
+    JiraConfig,
     JiraContext,
     JiraTicket,
     LinkedIssue,
 )
+from devscontext.plugins.base import Adapter, SearchResult, SourceContext
 
 if TYPE_CHECKING:
-    from devscontext.models import JiraConfig
+    pass
 
 logger = get_logger(__name__)
 
 
 class JiraAdapter(Adapter):
-    """Adapter for fetching context from Jira issues."""
+    """Adapter for fetching context from Jira issues.
+
+    Implements the Adapter interface for the plugin system.
+    Provides context from Jira tickets, comments, and linked issues.
+
+    Class Attributes:
+        name: Adapter identifier ("jira").
+        source_type: Source category ("issue_tracker").
+        config_schema: Configuration model (JiraConfig).
+    """
+
+    # Adapter class attributes
+    name: ClassVar[str] = ADAPTER_JIRA
+    source_type: ClassVar[str] = SOURCE_TYPE_ISSUE_TRACKER
+    config_schema: ClassVar[type[JiraConfig]] = JiraConfig
 
     def __init__(self, config: JiraConfig) -> None:
-        """Initialize the Jira adapter."""
+        """Initialize the Jira adapter.
+
+        Args:
+            config: Jira configuration with credentials and settings.
+        """
         self._config = config
         self._client: httpx.AsyncClient | None = None
-
-    @property
-    def name(self) -> str:
-        """Return the adapter name."""
-        return ADAPTER_JIRA
-
-    @property
-    def source_type(self) -> str:
-        """Return the source type."""
-        return SOURCE_TYPE_ISSUE_TRACKER
 
     def _get_client(self) -> httpx.AsyncClient:
         """Get or create the HTTP client."""
@@ -464,31 +475,141 @@ class JiraAdapter(Adapter):
 
         return "\n".join(parts)
 
-    async def fetch_context(self, task_id: str) -> list[ContextData]:
-        """Fetch context from a Jira issue."""
+    async def fetch_task_context(
+        self,
+        task_id: str,
+        ticket: JiraTicket | None = None,
+    ) -> SourceContext:
+        """Fetch context from a Jira issue.
+
+        Implements the SourcePlugin interface. Fetches the ticket, comments,
+        and linked issues, returning them as a SourceContext.
+
+        Args:
+            task_id: The Jira ticket ID (e.g., "PROJ-123").
+            ticket: Ignored for Jira adapter (we fetch fresh data).
+
+        Returns:
+            SourceContext with JiraContext data, or empty context if disabled/error.
+        """
         if not self._config.enabled:
             logger.debug("Jira adapter is disabled")
-            return []
+            return SourceContext(
+                source_name=self.name,
+                source_type=self.source_type,
+                data=None,
+                raw_text="",
+            )
 
         context = await self.get_ticket_full_context(task_id)
         if context is None:
+            return SourceContext(
+                source_name=self.name,
+                source_type=self.source_type,
+                data=None,
+                raw_text="",
+                metadata={"task_id": task_id, "error": "not_found"},
+            )
+
+        raw_text = self._format_context_content(context)
+
+        return SourceContext(
+            source_name=self.name,
+            source_type=self.source_type,
+            data=context,
+            raw_text=raw_text,
+            metadata={
+                "task_id": task_id,
+                "status": context.ticket.status,
+                "assignee": context.ticket.assignee,
+                "labels": context.ticket.labels,
+                "components": context.ticket.components,
+                "comment_count": len(context.comments),
+                "linked_issue_count": len(context.linked_issues),
+            },
+        )
+
+    async def search(
+        self,
+        query: str,
+        max_results: int = 10,
+    ) -> list[SearchResult]:
+        """Search for Jira issues matching the query.
+
+        Implements the SourcePlugin interface. Performs JQL text search
+        across issue summary and description.
+
+        Args:
+            query: Search terms to find in issues.
+            max_results: Maximum number of results to return.
+
+        Returns:
+            List of SearchResult items.
+        """
+        if not self._config.enabled:
             return []
 
-        content = self._format_context_content(context)
+        tickets = await self.search_issues(query, max_results)
+
+        results: list[SearchResult] = []
+        for ticket in tickets:
+            # Build excerpt from title and status
+            excerpt = f"{ticket.title}\n\nStatus: {ticket.status}"
+            if ticket.assignee:
+                excerpt += f"\nAssignee: {ticket.assignee}"
+            if ticket.labels:
+                excerpt += f"\nLabels: {', '.join(ticket.labels)}"
+
+            # Build URL if we have base_url
+            url = None
+            if self._config.base_url:
+                url = f"{self._config.base_url.rstrip('/')}/browse/{ticket.ticket_id}"
+
+            results.append(
+                SearchResult(
+                    source_name=self.name,
+                    source_type=self.source_type,
+                    title=f"[{ticket.ticket_id}] {ticket.title}",
+                    excerpt=excerpt,
+                    url=url,
+                    metadata={
+                        "ticket_id": ticket.ticket_id,
+                        "status": ticket.status,
+                        "assignee": ticket.assignee,
+                    },
+                )
+            )
+
+        return results
+
+    async def fetch_context(self, task_id: str) -> list[ContextData]:
+        """Fetch context from a Jira issue (legacy Adapter interface).
+
+        This method is kept for backward compatibility with the old Adapter
+        interface. New code should use fetch_task_context() instead.
+
+        Args:
+            task_id: The Jira ticket ID.
+
+        Returns:
+            List of ContextData items.
+        """
+        source_context = await self.fetch_task_context(task_id)
+
+        if source_context.is_empty():
+            return []
+
+        context = source_context.data
+        if not isinstance(context, JiraContext):
+            return []
 
         return [
             ContextData(
                 source=f"jira:{task_id}",
                 source_type=self.source_type,
                 title=f"[{task_id}] {context.ticket.title}",
-                content=content,
-                metadata={
-                    "status": context.ticket.status,
-                    "assignee": context.ticket.assignee,
-                    "labels": context.ticket.labels,
-                    "comment_count": len(context.comments),
-                    "linked_issue_count": len(context.linked_issues),
-                },
+                content=source_context.raw_text,
+                metadata=dict(source_context.metadata),
             )
         ]
 

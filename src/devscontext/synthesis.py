@@ -1,6 +1,6 @@
 """Context synthesis - LLM-based synthesis of context from multiple sources.
 
-This module provides the SynthesisEngine class that uses an LLM to combine
+This module provides the LLMSynthesisPlugin class that uses an LLM to combine
 raw data from adapters into a structured, concise context block suitable
 for AI coding assistants.
 
@@ -9,33 +9,34 @@ Supported providers:
 - openai: GPT models via the OpenAI SDK
 - ollama: Local models via Ollama HTTP API
 
+This module implements the SynthesisPlugin interface for the plugin system.
+
 Example:
     config = SynthesisConfig(provider="anthropic", model="claude-haiku-4-5")
-    engine = SynthesisEngine(config)
-    result = await engine.synthesize(
+    plugin = LLMSynthesisPlugin(config)
+    result = await plugin.synthesize(
         task_id="PROJ-123",
-        jira_context=jira_ctx,
-        meeting_context=meeting_ctx,
-        docs_context=docs_ctx,
+        source_contexts={"jira": jira_ctx, "fireflies": meeting_ctx, "local_docs": docs_ctx},
     )
 """
 
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, ClassVar
 
 import httpx
 
 from devscontext.constants import DEFAULT_HTTP_TIMEOUT_SECONDS
 from devscontext.logging import get_logger
+from devscontext.models import SynthesisConfig
+from devscontext.plugins.base import SourceContext, SynthesisPlugin
 
 if TYPE_CHECKING:
     from devscontext.models import (
         DocsContext,
         JiraContext,
         MeetingContext,
-        SynthesisConfig,
     )
 
 logger = get_logger(__name__)
@@ -260,32 +261,70 @@ def create_provider(config: SynthesisConfig) -> LLMProvider:
 
 
 # =============================================================================
-# SYNTHESIS ENGINE
+# LLM SYNTHESIS PLUGIN
 # =============================================================================
 
 
-class SynthesisEngine:
-    """Engine for synthesizing context from multiple sources using an LLM.
+class LLMSynthesisPlugin(SynthesisPlugin):
+    """LLM-based synthesis plugin for combining context from multiple sources.
 
-    The engine takes raw context from Jira, meetings, and documentation,
-    formats it into a prompt, and uses an LLM to produce a structured
-    context block for AI coding assistants.
+    Implements the SynthesisPlugin interface for the plugin system.
+    Uses an LLM to combine raw data from adapters into a structured,
+    concise context block suitable for AI coding assistants.
+
+    Supports custom prompt templates via config.prompt_template path.
+
+    Class Attributes:
+        name: Plugin identifier ("llm").
+        config_schema: Configuration model (SynthesisConfig).
     """
 
+    # SynthesisPlugin class attributes
+    name: ClassVar[str] = "llm"
+    config_schema: ClassVar[type[SynthesisConfig]] = SynthesisConfig
+
     def __init__(self, config: SynthesisConfig) -> None:
-        """Initialize the synthesis engine.
+        """Initialize the synthesis plugin.
 
         Args:
             config: Synthesis configuration.
         """
         self._config = config
         self._provider: LLMProvider | None = None
+        self._custom_prompt: str | None = None
 
     def _get_provider(self) -> LLMProvider:
         """Get or create the LLM provider (lazy initialization)."""
         if self._provider is None:
             self._provider = create_provider(self._config)
         return self._provider
+
+    def _get_prompt_template(self) -> str:
+        """Get the prompt template (custom or default).
+
+        If config.prompt_template is set, loads from that file.
+        Otherwise uses the default SYNTHESIS_PROMPT.
+
+        Returns:
+            The prompt template string.
+        """
+        if self._custom_prompt is not None:
+            return self._custom_prompt
+
+        if self._config.prompt_template:
+            from pathlib import Path
+
+            template_path = Path(self._config.prompt_template)
+            if template_path.exists():
+                self._custom_prompt = template_path.read_text()
+                logger.info(f"Loaded custom prompt template from: {template_path}")
+                return self._custom_prompt
+            else:
+                logger.warning(
+                    f"Custom prompt template not found: {template_path}, using default"
+                )
+
+        return SYNTHESIS_PROMPT
 
     def _format_jira_context(self, ctx: JiraContext) -> str:
         """Format Jira context as raw data for the prompt."""
@@ -486,24 +525,39 @@ class SynthesisEngine:
     async def synthesize(
         self,
         task_id: str,
-        jira_context: JiraContext | None,
-        meeting_context: MeetingContext | None,
-        docs_context: DocsContext | None,
+        source_contexts: dict[str, SourceContext],
     ) -> str:
         """Synthesize context from multiple sources using LLM.
 
-        Takes raw data from adapters and produces a structured context block
-        suitable for AI coding assistants.
+        Implements the SynthesisPlugin interface. Takes context data from
+        all enabled adapters and combines it into a structured markdown
+        document suitable for AI coding assistants.
 
         Args:
             task_id: The task identifier.
-            jira_context: Jira ticket context (if available).
-            meeting_context: Meeting transcripts context (if available).
-            docs_context: Documentation context (if available).
+            source_contexts: Dict mapping adapter names to their SourceContext.
 
         Returns:
             Synthesized markdown context, or fallback raw format on error.
         """
+        # Extract typed contexts from source_contexts
+        from devscontext.models import DocsContext, JiraContext, MeetingContext
+
+        jira_context: JiraContext | None = None
+        meeting_context: MeetingContext | None = None
+        docs_context: DocsContext | None = None
+
+        for _name, ctx in source_contexts.items():
+            if ctx.is_empty():
+                continue
+
+            if isinstance(ctx.data, JiraContext):
+                jira_context = ctx.data
+            elif isinstance(ctx.data, MeetingContext):
+                meeting_context = ctx.data
+            elif isinstance(ctx.data, DocsContext):
+                docs_context = ctx.data
+
         # Build raw data
         raw_data = self._build_raw_data(jira_context, meeting_context, docs_context)
 
@@ -515,8 +569,9 @@ class SynthesisEngine:
         if jira_context and jira_context.ticket:
             title = jira_context.ticket.title
 
-        # Build the prompt
-        prompt = SYNTHESIS_PROMPT.format(
+        # Build the prompt using custom or default template
+        prompt_template = self._get_prompt_template()
+        prompt = prompt_template.format(
             task_id=task_id,
             title=title,
             raw_data=raw_data,
@@ -555,3 +610,260 @@ class SynthesisEngine:
                 extra={"error": str(e), "provider": self._config.provider},
             )
             return self._format_fallback(task_id, jira_context, meeting_context, docs_context)
+
+
+# =============================================================================
+# TEMPLATE SYNTHESIS PLUGIN
+# =============================================================================
+
+
+class TemplateSynthesisPlugin(SynthesisPlugin):
+    """Template-based synthesis plugin using Jinja2 templates.
+
+    Combines context data using a Jinja2 template file, providing
+    customizable output without LLM costs. Good for teams that want
+    consistent, deterministic output format.
+
+    Class Attributes:
+        name: Plugin identifier ("template").
+        config_schema: Configuration model (SynthesisConfig).
+    """
+
+    name: ClassVar[str] = "template"
+    config_schema: ClassVar[type[SynthesisConfig]] = SynthesisConfig
+
+    def __init__(self, config: SynthesisConfig) -> None:
+        """Initialize the template synthesis plugin.
+
+        Args:
+            config: Synthesis configuration with template_path.
+        """
+        self._config = config
+        self._template: Any = None
+
+    def _get_template(self) -> Any:
+        """Get or create the Jinja2 template (lazy initialization)."""
+        if self._template is None:
+            try:
+                from jinja2 import Environment, FileSystemLoader
+            except ImportError as e:
+                raise ImportError(
+                    "jinja2 package not installed. Install with: pip install jinja2"
+                ) from e
+
+            template_path = self._config.template_path
+            if not template_path:
+                raise ValueError("template_path is required for template synthesis plugin")
+
+            from pathlib import Path
+
+            template_file = Path(template_path)
+            if not template_file.exists():
+                raise ValueError(f"Template file not found: {template_path}")
+
+            env = Environment(
+                loader=FileSystemLoader(str(template_file.parent)),
+                autoescape=False,
+            )
+            self._template = env.get_template(template_file.name)
+
+        return self._template
+
+    async def synthesize(
+        self,
+        task_id: str,
+        source_contexts: dict[str, SourceContext],
+    ) -> str:
+        """Synthesize context using Jinja2 template.
+
+        The template receives:
+        - task_id: The task identifier
+        - contexts: Dict of source contexts
+        - jira: JiraContext if available
+        - meetings: MeetingContext if available
+        - docs: DocsContext if available
+
+        Args:
+            task_id: The task identifier.
+            source_contexts: Dict mapping adapter names to their SourceContext.
+
+        Returns:
+            Rendered template output.
+        """
+        from devscontext.models import DocsContext, JiraContext, MeetingContext
+
+        # Extract typed contexts
+        jira_context: JiraContext | None = None
+        meeting_context: MeetingContext | None = None
+        docs_context: DocsContext | None = None
+
+        for _name, ctx in source_contexts.items():
+            if ctx.is_empty():
+                continue
+            if isinstance(ctx.data, JiraContext):
+                jira_context = ctx.data
+            elif isinstance(ctx.data, MeetingContext):
+                meeting_context = ctx.data
+            elif isinstance(ctx.data, DocsContext):
+                docs_context = ctx.data
+
+        try:
+            template = self._get_template()
+            return template.render(
+                task_id=task_id,
+                contexts=source_contexts,
+                jira=jira_context,
+                meetings=meeting_context,
+                docs=docs_context,
+            )
+        except Exception as e:
+            logger.warning(f"Template synthesis failed: {e}")
+            return f"## Task: {task_id}\n\nTemplate synthesis error: {e}"
+
+
+# =============================================================================
+# PASSTHROUGH SYNTHESIS PLUGIN
+# =============================================================================
+
+
+class PassthroughSynthesisPlugin(SynthesisPlugin):
+    """Passthrough synthesis plugin that returns raw formatted data.
+
+    No LLM processing - just formats the raw context data as markdown.
+    Useful for debugging, testing, or when you want to see exactly
+    what data is being collected.
+
+    Class Attributes:
+        name: Plugin identifier ("passthrough").
+        config_schema: Configuration model (SynthesisConfig).
+    """
+
+    name: ClassVar[str] = "passthrough"
+    config_schema: ClassVar[type[SynthesisConfig]] = SynthesisConfig
+
+    def __init__(self, config: SynthesisConfig) -> None:
+        """Initialize the passthrough synthesis plugin.
+
+        Args:
+            config: Synthesis configuration (mostly unused for passthrough).
+        """
+        self._config = config
+
+    async def synthesize(
+        self,
+        task_id: str,
+        source_contexts: dict[str, SourceContext],
+    ) -> str:
+        """Return raw formatted context without LLM processing.
+
+        Args:
+            task_id: The task identifier.
+            source_contexts: Dict mapping adapter names to their SourceContext.
+
+        Returns:
+            Raw markdown formatted context.
+        """
+        from devscontext.models import DocsContext, JiraContext, MeetingContext
+
+        parts = [f"## Task: {task_id}", ""]
+
+        if not source_contexts:
+            parts.append("No context data available.")
+            return "\n".join(parts)
+
+        for name, ctx in source_contexts.items():
+            if ctx.is_empty():
+                continue
+
+            parts.append(f"### Source: {name} ({ctx.source_type})")
+            parts.append(f"*Fetched at: {ctx.fetched_at.isoformat()}*")
+            parts.append("")
+
+            # Format based on data type
+            if isinstance(ctx.data, JiraContext):
+                parts.append(self._format_jira(ctx.data))
+            elif isinstance(ctx.data, MeetingContext):
+                parts.append(self._format_meetings(ctx.data))
+            elif isinstance(ctx.data, DocsContext):
+                parts.append(self._format_docs(ctx.data))
+            elif ctx.raw_text:
+                parts.append(ctx.raw_text)
+            else:
+                parts.append(f"*Data type: {type(ctx.data).__name__}*")
+
+            parts.append("")
+
+        return "\n".join(parts)
+
+    def _format_jira(self, ctx: JiraContext) -> str:
+        """Format Jira context as markdown."""
+        lines = []
+        ticket = ctx.ticket
+
+        lines.append(f"**{ticket.ticket_id}**: {ticket.title}")
+        lines.append(f"- Status: {ticket.status}")
+        if ticket.assignee:
+            lines.append(f"- Assignee: {ticket.assignee}")
+        if ticket.labels:
+            lines.append(f"- Labels: {', '.join(ticket.labels)}")
+        if ticket.components:
+            lines.append(f"- Components: {', '.join(ticket.components)}")
+        if ticket.description:
+            lines.append(f"\n**Description:**\n{ticket.description}")
+        if ticket.acceptance_criteria:
+            lines.append(f"\n**Acceptance Criteria:**\n{ticket.acceptance_criteria}")
+
+        if ctx.comments:
+            lines.append(f"\n**Comments ({len(ctx.comments)}):**")
+            for c in ctx.comments[:5]:
+                lines.append(f"- {c.author}: {c.body[:200]}...")
+
+        if ctx.linked_issues:
+            lines.append(f"\n**Linked Issues ({len(ctx.linked_issues)}):**")
+            for li in ctx.linked_issues:
+                lines.append(f"- {li.ticket_id}: {li.title} ({li.link_type})")
+
+        return "\n".join(lines)
+
+    def _format_meetings(self, ctx: MeetingContext) -> str:
+        """Format meeting context as markdown."""
+        if not ctx.meetings:
+            return "*No meetings found*"
+
+        lines = []
+        for m in ctx.meetings:
+            date_str = m.meeting_date.strftime("%Y-%m-%d")
+            lines.append(f"**{m.meeting_title}** ({date_str})")
+            if m.participants:
+                lines.append(f"Participants: {', '.join(m.participants)}")
+            lines.append(f"\n{m.excerpt[:500]}...")
+            if m.decisions:
+                lines.append("\nDecisions:")
+                for d in m.decisions:
+                    lines.append(f"- {d}")
+            if m.action_items:
+                lines.append("\nAction Items:")
+                for a in m.action_items:
+                    lines.append(f"- {a}")
+            lines.append("")
+
+        return "\n".join(lines)
+
+    def _format_docs(self, ctx: DocsContext) -> str:
+        """Format docs context as markdown."""
+        if not ctx.sections:
+            return "*No documentation found*"
+
+        lines = []
+        for s in ctx.sections:
+            title = s.section_title or s.file_path
+            lines.append(f"**{title}** [{s.doc_type}]")
+            lines.append(f"*Source: {s.file_path}*")
+            lines.append(f"\n{s.content[:500]}...")
+            lines.append("")
+
+        return "\n".join(lines)
+
+
+# Keep old name as alias for backward compatibility
+SynthesisEngine = LLMSynthesisPlugin

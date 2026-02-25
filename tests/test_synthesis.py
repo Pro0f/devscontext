@@ -16,6 +16,7 @@ from devscontext.models import (
     MeetingExcerpt,
     SynthesisConfig,
 )
+from devscontext.plugins.base import SourceContext
 from devscontext.synthesis import (
     AnthropicProvider,
     OllamaProvider,
@@ -23,6 +24,41 @@ from devscontext.synthesis import (
     SynthesisEngine,
     create_provider,
 )
+
+
+def make_source_contexts(
+    jira_context: JiraContext | None = None,
+    meeting_context: MeetingContext | None = None,
+    docs_context: DocsContext | None = None,
+) -> dict[str, SourceContext]:
+    """Helper to build source_contexts dict from typed contexts."""
+    contexts: dict[str, SourceContext] = {}
+
+    if jira_context is not None:
+        contexts["jira"] = SourceContext(
+            source_name="jira",
+            source_type="issue_tracker",
+            data=jira_context,
+            raw_text="",
+        )
+
+    if meeting_context is not None:
+        contexts["fireflies"] = SourceContext(
+            source_name="fireflies",
+            source_type="meeting",
+            data=meeting_context,
+            raw_text="",
+        )
+
+    if docs_context is not None:
+        contexts["local_docs"] = SourceContext(
+            source_name="local_docs",
+            source_type="documentation",
+            data=docs_context,
+            raw_text="",
+        )
+
+    return contexts
 
 
 @pytest.fixture
@@ -316,9 +352,7 @@ class TestSynthesisEngine:
 
         result = await engine.synthesize(
             task_id="PROJ-123",
-            jira_context=sample_jira_context,
-            meeting_context=None,
-            docs_context=None,
+            source_contexts=make_source_contexts(jira_context=sample_jira_context),
         )
 
         # Should fall back to raw format
@@ -332,9 +366,7 @@ class TestSynthesisEngine:
         """Test synthesis returns message when no context provided."""
         result = await synthesis_engine.synthesize(
             task_id="EMPTY-123",
-            jira_context=None,
-            meeting_context=None,
-            docs_context=None,
+            source_contexts={},
         )
 
         assert "EMPTY-123" in result
@@ -359,9 +391,7 @@ class TestSynthesisEngine:
 
         result = await engine.synthesize(
             task_id="PROJ-123",
-            jira_context=sample_jira_context,
-            meeting_context=None,
-            docs_context=None,
+            source_contexts=make_source_contexts(jira_context=sample_jira_context),
         )
 
         assert "Synthesized content" in result

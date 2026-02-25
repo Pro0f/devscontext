@@ -34,6 +34,10 @@ class JiraConfig(BaseModel):
     api_token: str = Field(default="", description="Jira API token (from env)")
     project: str = Field(default="", description="Default Jira project key")
     enabled: bool = Field(default=False, description="Whether adapter is enabled")
+    primary: bool = Field(
+        default=True,
+        description="Primary sources are fetched first, context shared with secondary sources",
+    )
 
 
 class FirefliesConfig(BaseModel):
@@ -41,6 +45,7 @@ class FirefliesConfig(BaseModel):
 
     api_key: str = Field(default="", description="Fireflies.ai API key (from env)")
     enabled: bool = Field(default=False, description="Whether adapter is enabled")
+    primary: bool = Field(default=False, description="Whether this is a primary source")
 
 
 class DocsConfig(BaseModel):
@@ -53,14 +58,19 @@ class DocsConfig(BaseModel):
     standards_path: str | None = Field(default=None, description="Path to coding standards docs")
     architecture_path: str | None = Field(default=None, description="Path to architecture docs")
     enabled: bool = Field(default=True, description="Whether adapter is enabled")
+    primary: bool = Field(default=False, description="Whether this is a primary source")
 
 
 class SynthesisConfig(BaseModel):
-    """LLM synthesis configuration."""
+    """Synthesis configuration supporting multiple synthesis plugins."""
 
+    plugin: Literal["llm", "template", "passthrough"] = Field(
+        default="llm",
+        description="Synthesis plugin to use (llm, template, passthrough)",
+    )
     provider: Literal["anthropic", "openai", "ollama"] = Field(
         default="anthropic",
-        description="LLM provider for synthesis",
+        description="LLM provider for synthesis (only used when plugin=llm)",
     )
     model: str = Field(default="claude-haiku-4-5", description="Model name/ID to use")
     api_key: str | None = Field(default=None, description="API key for the provider (from env)")
@@ -69,6 +79,20 @@ class SynthesisConfig(BaseModel):
         ge=100,
         le=10000,
         description="Maximum tokens in synthesized output",
+    )
+    temperature: float = Field(
+        default=0.0,
+        ge=0.0,
+        le=2.0,
+        description="Temperature for LLM generation",
+    )
+    prompt_template: str | None = Field(
+        default=None,
+        description="Path to custom prompt template file (optional)",
+    )
+    template_path: str | None = Field(
+        default=None,
+        description="Path to Jinja2 template (only used when plugin=template)",
     )
 
 

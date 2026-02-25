@@ -27,7 +27,43 @@ from devscontext.models import (
     MeetingExcerpt,
     SynthesisConfig,
 )
+from devscontext.plugins.base import SourceContext
 from devscontext.synthesis import SynthesisEngine
+
+
+def make_source_contexts(
+    jira_context: JiraContext | None = None,
+    meeting_context: MeetingContext | None = None,
+    docs_context: DocsContext | None = None,
+) -> dict[str, SourceContext]:
+    """Helper to build source_contexts dict from typed contexts."""
+    contexts: dict[str, SourceContext] = {}
+
+    if jira_context is not None:
+        contexts["jira"] = SourceContext(
+            source_name="jira",
+            source_type="issue_tracker",
+            data=jira_context,
+            raw_text="",
+        )
+
+    if meeting_context is not None:
+        contexts["fireflies"] = SourceContext(
+            source_name="fireflies",
+            source_type="meeting",
+            data=meeting_context,
+            raw_text="",
+        )
+
+    if docs_context is not None:
+        contexts["local_docs"] = SourceContext(
+            source_name="local_docs",
+            source_type="documentation",
+            data=docs_context,
+            raw_text="",
+        )
+
+    return contexts
 
 FIXTURES_DIR = Path(__file__).parent / "fixtures"
 
@@ -153,9 +189,7 @@ class TestSynthesisQuality:
         """Test that fallback output includes all source data."""
         result = await synthesis_engine.synthesize(
             task_id="AUTH-123",
-            jira_context=jira_context,
-            meeting_context=meeting_context,
-            docs_context=docs_context,
+            source_contexts=make_source_contexts(jira_context, meeting_context, docs_context),
         )
 
         # Should contain task ID
@@ -181,9 +215,7 @@ class TestSynthesisQuality:
         """Test that comments are included in output."""
         result = await synthesis_engine.synthesize(
             task_id="AUTH-123",
-            jira_context=jira_context,
-            meeting_context=None,
-            docs_context=None,
+            source_contexts=make_source_contexts(jira_context=jira_context),
         )
 
         # Should include comment authors
@@ -202,9 +234,7 @@ class TestSynthesisQuality:
         """Test that linked issues are included."""
         result = await synthesis_engine.synthesize(
             task_id="AUTH-123",
-            jira_context=jira_context,
-            meeting_context=None,
-            docs_context=None,
+            source_contexts=make_source_contexts(jira_context=jira_context),
         )
 
         # Should include linked ticket IDs
@@ -219,9 +249,7 @@ class TestSynthesisQuality:
         """Test that meeting decisions are highlighted."""
         result = await synthesis_engine.synthesize(
             task_id="AUTH-123",
-            jira_context=None,
-            meeting_context=meeting_context,
-            docs_context=None,
+            source_contexts=make_source_contexts(meeting_context=meeting_context),
         )
 
         # Should include decisions
@@ -237,9 +265,7 @@ class TestSynthesisQuality:
         """Test that action items from meetings are included."""
         result = await synthesis_engine.synthesize(
             task_id="AUTH-123",
-            jira_context=None,
-            meeting_context=meeting_context,
-            docs_context=None,
+            source_contexts=make_source_contexts(meeting_context=meeting_context),
         )
 
         # Should include action items
@@ -253,9 +279,7 @@ class TestSynthesisQuality:
         """Test that coding standards are included."""
         result = await synthesis_engine.synthesize(
             task_id="AUTH-123",
-            jira_context=None,
-            meeting_context=None,
-            docs_context=docs_context,
+            source_contexts=make_source_contexts(docs_context=docs_context),
         )
 
         # Should include standards content
@@ -272,9 +296,7 @@ class TestSynthesisQuality:
         """Test that combined output is a reasonable length."""
         result = await synthesis_engine.synthesize(
             task_id="AUTH-123",
-            jira_context=jira_context,
-            meeting_context=meeting_context,
-            docs_context=docs_context,
+            source_contexts=make_source_contexts(jira_context, meeting_context, docs_context),
         )
 
         # Should be substantial but not excessively long
@@ -357,9 +379,7 @@ class TestEdgeCases:
         """Test output when no context is provided."""
         result = await synthesis_engine.synthesize(
             task_id="EMPTY-1",
-            jira_context=None,
-            meeting_context=None,
-            docs_context=None,
+            source_contexts={},
         )
 
         assert "EMPTY-1" in result
@@ -373,9 +393,7 @@ class TestEdgeCases:
         """Test output with only Jira context."""
         result = await synthesis_engine.synthesize(
             task_id="AUTH-123",
-            jira_context=jira_context,
-            meeting_context=None,
-            docs_context=None,
+            source_contexts=make_source_contexts(jira_context=jira_context),
         )
 
         assert "AUTH-123" in result
@@ -391,9 +409,7 @@ class TestEdgeCases:
         """Test output with only meeting context."""
         result = await synthesis_engine.synthesize(
             task_id="AUTH-123",
-            jira_context=None,
-            meeting_context=meeting_context,
-            docs_context=None,
+            source_contexts=make_source_contexts(meeting_context=meeting_context),
         )
 
         assert "AUTH-123" in result

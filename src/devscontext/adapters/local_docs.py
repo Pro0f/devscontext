@@ -4,10 +4,12 @@ This adapter scans configured directories for markdown files, splits them
 into sections, and matches them against Jira tickets using components,
 labels, and keyword matching.
 
+This adapter implements the Adapter interface for the plugin system.
+
 Example:
     config = DocsConfig(paths=["./docs/"])
     adapter = LocalDocsAdapter(config)
-    docs = await adapter.find_relevant_docs(ticket)
+    docs = await adapter.fetch_task_context("PROJ-123", ticket)
 """
 
 from __future__ import annotations
@@ -15,19 +17,19 @@ from __future__ import annotations
 import re
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import TYPE_CHECKING, Literal
+from typing import TYPE_CHECKING, ClassVar, Literal
 
-from devscontext.adapters.base import Adapter
 from devscontext.constants import (
     ADAPTER_LOCAL_DOCS,
     SOURCE_TYPE_DOCUMENTATION,
 )
 from devscontext.logging import get_logger
-from devscontext.models import ContextData, DocsContext, DocSection
+from devscontext.models import ContextData, DocsConfig, DocsContext, DocSection
+from devscontext.plugins.base import Adapter, SearchResult, SourceContext
 from devscontext.utils import extract_keywords, truncate_text
 
 if TYPE_CHECKING:
-    from devscontext.models import DocsConfig, JiraTicket
+    from devscontext.models import JiraTicket
 
 logger = get_logger(__name__)
 
@@ -61,7 +63,22 @@ class ParsedDoc:
 
 
 class LocalDocsAdapter(Adapter):
-    """Adapter for finding relevant local documentation."""
+    """Adapter for finding relevant local documentation.
+
+    Implements the Adapter interface for the plugin system.
+    Scans local directories for markdown files and matches them
+    against tickets using components, labels, and keywords.
+
+    Class Attributes:
+        name: Adapter identifier ("local_docs").
+        source_type: Source category ("documentation").
+        config_schema: Configuration model (DocsConfig).
+    """
+
+    # Adapter class attributes
+    name: ClassVar[str] = ADAPTER_LOCAL_DOCS
+    source_type: ClassVar[str] = SOURCE_TYPE_DOCUMENTATION
+    config_schema: ClassVar[type[DocsConfig]] = DocsConfig
 
     def __init__(self, config: DocsConfig) -> None:
         """Initialize the local docs adapter.
@@ -71,16 +88,6 @@ class LocalDocsAdapter(Adapter):
         """
         self._config = config
         self._cache: dict[Path, ParsedDoc] = {}
-
-    @property
-    def name(self) -> str:
-        """Return the adapter name."""
-        return ADAPTER_LOCAL_DOCS
-
-    @property
-    def source_type(self) -> str:
-        """Return the source type."""
-        return SOURCE_TYPE_DOCUMENTATION
 
     def _classify_doc_type(self, file_path: Path) -> DocType:
         """Classify a document based on its path.
@@ -521,11 +528,114 @@ class LocalDocsAdapter(Adapter):
 
         return DocsContext(sections=result_sections)
 
-    async def fetch_context(self, task_id: str) -> list[ContextData]:
-        """Fetch context from local docs (for Adapter interface compliance).
+    async def fetch_task_context(
+        self,
+        task_id: str,
+        ticket: JiraTicket | None = None,
+    ) -> SourceContext:
+        """Fetch context from local docs.
 
-        This method is less useful for local docs since we need a JiraTicket,
-        not just a task_id. Returns standards as fallback.
+        Implements the Adapter interface. Uses the ticket (if provided)
+        to find relevant docs based on components, labels, and keywords.
+        Falls back to standards if no ticket provided.
+
+        Args:
+            task_id: The task identifier.
+            ticket: Optional Jira ticket for context-aware matching.
+
+        Returns:
+            SourceContext with DocsContext data.
+        """
+        if not self._config.enabled:
+            return SourceContext(
+                source_name=self.name,
+                source_type=self.source_type,
+                data=None,
+                raw_text="",
+            )
+
+        if ticket:
+            docs = await self.find_relevant_docs(ticket)
+        else:
+            docs = await self.get_standards()
+
+        if not docs.sections:
+            return SourceContext(
+                source_name=self.name,
+                source_type=self.source_type,
+                data=docs,
+                raw_text="",
+                metadata={"task_id": task_id, "section_count": 0},
+            )
+
+        raw_text = self._format_docs_context(docs)
+
+        return SourceContext(
+            source_name=self.name,
+            source_type=self.source_type,
+            data=docs,
+            raw_text=raw_text,
+            metadata={
+                "task_id": task_id,
+                "section_count": len(docs.sections),
+            },
+        )
+
+    def _format_docs_context(self, docs: DocsContext) -> str:
+        """Format docs context as raw text for synthesis."""
+        parts: list[str] = []
+        for section in docs.sections:
+            if section.section_title:
+                parts.append(f"## {section.section_title}\n\n{section.content}")
+            else:
+                parts.append(section.content)
+        return "\n\n---\n\n".join(parts)
+
+    async def search(
+        self,
+        query: str,
+        max_results: int = 10,
+    ) -> list[SearchResult]:
+        """Search local docs for items matching the query.
+
+        Implements the Adapter interface.
+
+        Args:
+            query: Search terms to find in docs.
+            max_results: Maximum number of results to return.
+
+        Returns:
+            List of SearchResult items.
+        """
+        if not self._config.enabled:
+            return []
+
+        docs = await self.search_docs(query, max_results)
+
+        results: list[SearchResult] = []
+        for section in docs.sections:
+            title = section.section_title or Path(section.file_path).name
+            excerpt = truncate_text(section.content, 300)
+
+            results.append(
+                SearchResult(
+                    source_name=self.name,
+                    source_type=self.source_type,
+                    title=title,
+                    excerpt=excerpt,
+                    metadata={
+                        "file_path": section.file_path,
+                        "doc_type": section.doc_type,
+                    },
+                )
+            )
+
+        return results
+
+    async def fetch_context(self, task_id: str) -> list[ContextData]:
+        """Fetch context from local docs (legacy Adapter interface).
+
+        This method is kept for backward compatibility.
 
         Args:
             task_id: The task identifier.
@@ -533,12 +643,13 @@ class LocalDocsAdapter(Adapter):
         Returns:
             List of ContextData with standards.
         """
-        if not self._config.enabled:
+        source_context = await self.fetch_task_context(task_id)
+
+        if source_context.is_empty():
             return []
 
-        docs = await self.get_standards()
-
-        if not docs.sections:
+        docs = source_context.data
+        if not isinstance(docs, DocsContext):
             return []
 
         # Format all sections as content
@@ -555,7 +666,7 @@ class LocalDocsAdapter(Adapter):
             ContextData(
                 source=f"local_docs:{task_id}",
                 source_type=self.source_type,
-                title="Coding Standards",
+                title="Documentation",
                 content=content,
                 metadata={"section_count": len(docs.sections)},
             )
@@ -580,6 +691,10 @@ class LocalDocsAdapter(Adapter):
             extra={"paths": self._config.paths},
         )
         return False
+
+    async def close(self) -> None:
+        """Clean up resources by clearing the document cache."""
+        self.clear_cache()
 
     def clear_cache(self) -> None:
         """Clear the parsed document cache."""

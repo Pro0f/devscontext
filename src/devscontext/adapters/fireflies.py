@@ -3,21 +3,22 @@
 This adapter connects to the Fireflies.ai GraphQL API to fetch meeting
 transcripts and search for relevant discussions related to a task.
 
+This adapter implements the Adapter interface for the plugin system.
+
 Example:
     config = FirefliesConfig(api_key="your-api-key", enabled=True)
     adapter = FirefliesAdapter(config)
-    context = await adapter.fetch_context("PROJ-123")
+    context = await adapter.fetch_task_context("PROJ-123")
 """
 
 from __future__ import annotations
 
 import re
 from datetime import UTC, datetime
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, ClassVar
 
 import httpx
 
-from devscontext.adapters.base import Adapter
 from devscontext.constants import (
     ADAPTER_FIREFLIES,
     DEFAULT_HTTP_TIMEOUT_SECONDS,
@@ -27,10 +28,11 @@ from devscontext.constants import (
     SOURCE_TYPE_MEETING,
 )
 from devscontext.logging import get_logger
-from devscontext.models import ContextData, MeetingContext, MeetingExcerpt
+from devscontext.models import ContextData, FirefliesConfig, MeetingContext, MeetingExcerpt
+from devscontext.plugins.base import Adapter, SearchResult, SourceContext
 
 if TYPE_CHECKING:
-    from devscontext.models import FirefliesConfig
+    from devscontext.models import JiraTicket
 
 logger = get_logger(__name__)
 
@@ -59,24 +61,29 @@ query SearchTranscripts($query: String!, $limit: Int!) {
 class FirefliesAdapter(Adapter):
     """Adapter for fetching context from Fireflies meeting transcripts.
 
-    This adapter connects to Fireflies.ai to search for meeting transcripts
+    Implements the Adapter interface for the plugin system.
+    Connects to Fireflies.ai to search for meeting transcripts
     that mention a specific task ID or keywords.
+
+    Class Attributes:
+        name: Adapter identifier ("fireflies").
+        source_type: Source category ("meeting").
+        config_schema: Configuration model (FirefliesConfig).
     """
 
+    # Adapter class attributes
+    name: ClassVar[str] = ADAPTER_FIREFLIES
+    source_type: ClassVar[str] = SOURCE_TYPE_MEETING
+    config_schema: ClassVar[type[FirefliesConfig]] = FirefliesConfig
+
     def __init__(self, config: FirefliesConfig) -> None:
-        """Initialize the Fireflies adapter."""
+        """Initialize the Fireflies adapter.
+
+        Args:
+            config: Fireflies configuration with API key.
+        """
         self._config = config
         self._client: httpx.AsyncClient | None = None
-
-    @property
-    def name(self) -> str:
-        """Return the adapter name."""
-        return ADAPTER_FIREFLIES
-
-    @property
-    def source_type(self) -> str:
-        """Return the source type."""
-        return SOURCE_TYPE_MEETING
 
     def _get_client(self) -> httpx.AsyncClient:
         """Get or create the HTTP client."""
@@ -351,8 +358,137 @@ class FirefliesAdapter(Adapter):
 
         return MeetingContext(meetings=excerpts)
 
-    async def fetch_context(self, task_id: str) -> list[ContextData]:
+    async def fetch_task_context(
+        self,
+        task_id: str,
+        ticket: JiraTicket | None = None,
+    ) -> SourceContext:
         """Fetch context from Fireflies meeting transcripts.
+
+        Implements the Adapter interface. Searches for meetings mentioning
+        the task ID or keywords from the ticket.
+
+        Args:
+            task_id: The task identifier to search for in transcripts.
+            ticket: Optional Jira ticket for keyword extraction.
+
+        Returns:
+            SourceContext with MeetingContext data.
+        """
+        if not self._config.enabled:
+            logger.debug("Fireflies adapter is disabled")
+            return SourceContext(
+                source_name=self.name,
+                source_type=self.source_type,
+                data=None,
+                raw_text="",
+            )
+
+        meeting_context = await self.get_meeting_context(task_id)
+
+        if not meeting_context.meetings:
+            return SourceContext(
+                source_name=self.name,
+                source_type=self.source_type,
+                data=meeting_context,
+                raw_text="",
+                metadata={"task_id": task_id, "meeting_count": 0},
+            )
+
+        raw_text = self._format_meeting_context(meeting_context)
+
+        return SourceContext(
+            source_name=self.name,
+            source_type=self.source_type,
+            data=meeting_context,
+            raw_text=raw_text,
+            metadata={
+                "task_id": task_id,
+                "meeting_count": len(meeting_context.meetings),
+            },
+        )
+
+    def _format_meeting_context(self, meeting_context: MeetingContext) -> str:
+        """Format meeting context as raw text for synthesis."""
+        parts: list[str] = []
+
+        for meeting in meeting_context.meetings:
+            content_parts = [f"## {meeting.meeting_title}"]
+            content_parts.append(f"\n**Date:** {meeting.meeting_date.strftime('%Y-%m-%d')}")
+
+            if meeting.participants:
+                content_parts.append(f"**Participants:** {', '.join(meeting.participants)}")
+
+            content_parts.append(f"\n### Relevant Discussion\n\n{meeting.excerpt}")
+
+            if meeting.action_items:
+                content_parts.append("\n### Action Items")
+                for item in meeting.action_items:
+                    content_parts.append(f"- {item}")
+
+            if meeting.decisions:
+                content_parts.append("\n### Decisions")
+                for decision in meeting.decisions:
+                    content_parts.append(f"- {decision}")
+
+            parts.append("\n".join(content_parts))
+
+        return "\n\n---\n\n".join(parts)
+
+    async def search(
+        self,
+        query: str,
+        max_results: int = 10,
+    ) -> list[SearchResult]:
+        """Search Fireflies transcripts for items matching the query.
+
+        Implements the Adapter interface.
+
+        Args:
+            query: Search terms to find in transcripts.
+            max_results: Maximum number of results to return.
+
+        Returns:
+            List of SearchResult items.
+        """
+        if not self._config.enabled:
+            return []
+
+        transcripts = await self.search_transcripts(query)
+
+        results: list[SearchResult] = []
+        for transcript in transcripts[:max_results]:
+            title = transcript.get("title") or "Untitled Meeting"
+            date_str = transcript.get("date", "")
+
+            # Get overview from summary
+            summary = transcript.get("summary") or {}
+            excerpt = summary.get("overview") or ""
+            if not excerpt:
+                # Fall back to first few sentences
+                sentences = transcript.get("sentences") or []
+                if sentences:
+                    excerpt = " ".join(s.get("text", "") for s in sentences[:3])
+
+            results.append(
+                SearchResult(
+                    source_name=self.name,
+                    source_type=self.source_type,
+                    title=title,
+                    excerpt=excerpt[:500] if excerpt else "No excerpt available",
+                    metadata={
+                        "date": date_str,
+                        "participants": transcript.get("participants") or [],
+                    },
+                )
+            )
+
+        return results
+
+    async def fetch_context(self, task_id: str) -> list[ContextData]:
+        """Fetch context from Fireflies (legacy Adapter interface).
+
+        This method is kept for backward compatibility.
 
         Args:
             task_id: The task identifier to search for in transcripts.
@@ -360,19 +496,18 @@ class FirefliesAdapter(Adapter):
         Returns:
             List of ContextData items, one per relevant meeting.
         """
-        if not self._config.enabled:
-            logger.debug("Fireflies adapter is disabled")
+        source_context = await self.fetch_task_context(task_id)
+
+        if source_context.is_empty():
             return []
 
-        meeting_context = await self.get_meeting_context(task_id)
-
-        if not meeting_context.meetings:
+        meeting_context = source_context.data
+        if not isinstance(meeting_context, MeetingContext):
             return []
 
         # Convert each meeting excerpt to ContextData
         results: list[ContextData] = []
         for meeting in meeting_context.meetings:
-            # Format content
             content_parts = [f"## {meeting.meeting_title}"]
             content_parts.append(f"\n**Date:** {meeting.meeting_date.strftime('%Y-%m-%d')}")
 
