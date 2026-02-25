@@ -208,3 +208,4 @@ __marimo__/
 
 # DevsContext specific
 .devscontext.yaml
+.devscontext/

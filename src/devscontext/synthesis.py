@@ -320,9 +320,7 @@ class LLMSynthesisPlugin(SynthesisPlugin):
                 logger.info(f"Loaded custom prompt template from: {template_path}")
                 return self._custom_prompt
             else:
-                logger.warning(
-                    f"Custom prompt template not found: {template_path}, using default"
-                )
+                logger.warning(f"Custom prompt template not found: {template_path}, using default")
 
         return SYNTHESIS_PROMPT
 
@@ -709,12 +707,14 @@ class TemplateSynthesisPlugin(SynthesisPlugin):
 
         try:
             template = self._get_template()
-            return template.render(
-                task_id=task_id,
-                contexts=source_contexts,
-                jira=jira_context,
-                meetings=meeting_context,
-                docs=docs_context,
+            return str(
+                template.render(
+                    task_id=task_id,
+                    contexts=source_contexts,
+                    jira=jira_context,
+                    meetings=meeting_context,
+                    docs=docs_context,
+                )
             )
         except Exception as e:
             logger.warning(f"Template synthesis failed: {e}")

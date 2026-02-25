@@ -19,6 +19,7 @@ from __future__ import annotations
 import sys
 import time
 from pathlib import Path
+from typing import Any
 
 import click
 
@@ -287,6 +288,290 @@ def serve(ctx: click.Context) -> None:
     from devscontext.server import main as server_main
 
     server_main()
+
+
+# =============================================================================
+# AGENT COMMANDS
+# =============================================================================
+
+
+@cli.group()
+@click.pass_context
+def agent(ctx: click.Context) -> None:
+    """Manage the pre-processing agent.
+
+    The agent watches Jira for tickets in a target status (e.g., "Ready for
+    Development") and pre-builds rich context before anyone picks them up.
+
+    Commands:
+        start: Run polling agent in foreground
+        run-once: Single poll cycle, then exit
+        status: Show pre-built context stats
+        process: Manually process a specific ticket
+    """
+    pass
+
+
+@agent.command()
+@click.pass_context
+def start(ctx: click.Context) -> None:
+    """Start the polling agent in foreground.
+
+    Polls Jira periodically for tickets in the target status and processes
+    them through the preprocessing pipeline. Press Ctrl+C to stop.
+    """
+    import asyncio
+    import signal
+
+    from devscontext.agents import JiraWatcher, PreprocessingPipeline
+    from devscontext.config import load_devscontext_config
+    from devscontext.storage import PrebuiltContextStorage
+
+    verbose = ctx.obj.get("verbose", False)
+
+    try:
+        config = load_devscontext_config()
+    except FileNotFoundError:
+        click.echo(_error("No .devscontext.yaml found. Run 'devscontext init' first."))
+        sys.exit(1)
+
+    if not config.agents.preprocessor.enabled:
+        click.echo(_error("Preprocessor agent not enabled in config."))
+        click.echo(_info("Set agents.preprocessor.enabled: true in .devscontext.yaml"))
+        sys.exit(1)
+
+    if not config.sources.jira.enabled:
+        click.echo(_error("Jira adapter not enabled. Agent requires Jira."))
+        sys.exit(1)
+
+    click.echo()
+    click.echo(click.style("DevsContext Agent", bold=True))
+    click.echo()
+    click.echo(
+        _info(f"Polling every {config.agents.preprocessor.trigger.poll_interval_minutes} minutes")
+    )
+    click.echo(_info(f"Watching for status: {config.agents.preprocessor.jira_status}"))
+    click.echo(_info(f"Project(s): {config.agents.preprocessor.jira_project}"))
+    click.echo()
+
+    async def run_agent() -> None:
+        storage = PrebuiltContextStorage(config.storage.path)
+        await storage.initialize()
+
+        pipeline = PreprocessingPipeline(config, storage)
+        watcher = JiraWatcher(config, pipeline)
+
+        # Handle Ctrl+C gracefully
+        loop = asyncio.get_event_loop()
+        for sig in (signal.SIGINT, signal.SIGTERM):
+            loop.add_signal_handler(sig, watcher.stop)
+
+        try:
+            click.echo(_success("Agent started. Press Ctrl+C to stop."))
+            click.echo()
+            await watcher.run()
+        finally:
+            await watcher.close()
+            await pipeline.close()
+            await storage.close()
+
+    try:
+        asyncio.run(run_agent())
+    except Exception as e:
+        if verbose:
+            import traceback
+
+            click.echo(traceback.format_exc(), err=True)
+        click.echo(_error(f"Agent error: {e}"), err=True)
+        sys.exit(1)
+
+    click.echo()
+    click.echo(_success("Agent stopped."))
+
+
+@agent.command("run-once")
+@click.pass_context
+def run_once(ctx: click.Context) -> None:
+    """Single run: check for ready tickets, process, exit.
+
+    Useful for cron jobs or CI pipelines. Performs one poll cycle,
+    processes any new tickets found, and exits.
+    """
+    import asyncio
+
+    from devscontext.agents import JiraWatcher, PreprocessingPipeline
+    from devscontext.config import load_devscontext_config
+    from devscontext.storage import PrebuiltContextStorage
+
+    verbose = ctx.obj.get("verbose", False)
+
+    try:
+        config = load_devscontext_config()
+    except FileNotFoundError:
+        click.echo(_error("No .devscontext.yaml found."))
+        sys.exit(1)
+
+    if not config.agents.preprocessor.enabled:
+        click.echo(_error("Preprocessor agent not enabled in config."))
+        sys.exit(1)
+
+    click.echo(click.style("DevsContext Agent - Single Run", bold=True))
+    click.echo()
+
+    async def run_single() -> int:
+        storage = PrebuiltContextStorage(config.storage.path)
+        await storage.initialize()
+
+        pipeline = PreprocessingPipeline(config, storage)
+        watcher = JiraWatcher(config, pipeline)
+
+        try:
+            processed = await watcher.run_once()
+            return processed
+        finally:
+            await watcher.close()
+            await pipeline.close()
+            await storage.close()
+
+    try:
+        processed = asyncio.run(run_single())
+        click.echo()
+        click.echo(_success(f"Processed {processed} ticket(s)."))
+    except Exception as e:
+        if verbose:
+            import traceback
+
+            click.echo(traceback.format_exc(), err=True)
+        click.echo(_error(f"Error: {e}"), err=True)
+        sys.exit(1)
+
+
+@agent.command()
+@click.pass_context
+def status(ctx: click.Context) -> None:
+    """Show pre-built context stats.
+
+    Displays statistics about stored pre-built context including
+    total count, active count, average quality, and last build time.
+    """
+    import asyncio
+
+    from devscontext.config import load_devscontext_config
+    from devscontext.storage import PrebuiltContextStorage
+
+    try:
+        config = load_devscontext_config()
+    except FileNotFoundError:
+        click.echo(_error("No .devscontext.yaml found."))
+        sys.exit(1)
+
+    async def get_status() -> dict[str, Any]:
+        storage = PrebuiltContextStorage(config.storage.path)
+        try:
+            await storage.initialize()
+            stats = await storage.get_stats()
+            return stats
+        finally:
+            await storage.close()
+
+    try:
+        stats = asyncio.run(get_status())
+    except Exception as e:
+        click.echo(_error(f"Could not read storage: {e}"))
+        sys.exit(1)
+
+    click.echo()
+    click.echo(click.style("Pre-built Context Storage", bold=True))
+    click.echo()
+    click.echo(f"  Total contexts:       {stats['total']}")
+    click.echo(f"  Active (not expired): {stats['active']}")
+    click.echo(f"  Expired:              {stats['expired']}")
+
+    if stats["avg_quality"] > 0:
+        click.echo(f"  Average quality:      {stats['avg_quality']:.1%}")
+
+    if stats["last_build"]:
+        click.echo(f"  Last build:           {stats['last_build']}")
+    else:
+        click.echo("  Last build:           (none)")
+
+    click.echo()
+    click.echo(_info(f"Storage path: {config.storage.path}"))
+
+
+@agent.command()
+@click.argument("task_id")
+@click.pass_context
+def process(ctx: click.Context, task_id: str) -> None:
+    """Manually trigger pre-processing for a specific ticket.
+
+    TASK_ID is the Jira ticket ID (e.g., PROJ-123).
+
+    This bypasses the watcher and immediately processes the specified
+    ticket through the full preprocessing pipeline.
+    """
+    import asyncio
+
+    from devscontext.agents import PreprocessingPipeline
+    from devscontext.config import load_devscontext_config
+    from devscontext.storage import PrebuiltContextStorage
+
+    verbose = ctx.obj.get("verbose", False)
+
+    try:
+        config = load_devscontext_config()
+    except FileNotFoundError:
+        click.echo(_error("No .devscontext.yaml found."))
+        sys.exit(1)
+
+    click.echo()
+    click.echo(click.style(f"Processing {task_id}", bold=True))
+    click.echo()
+
+    start_time = time.monotonic()
+
+    async def process_ticket() -> dict[str, Any]:
+        storage = PrebuiltContextStorage(config.storage.path)
+        await storage.initialize()
+
+        pipeline = PreprocessingPipeline(config, storage)
+
+        try:
+            context = await pipeline.process(task_id)
+            return {
+                "quality_score": context.context_quality_score,
+                "gaps": context.gaps,
+                "sources_count": len(context.sources_used),
+            }
+        finally:
+            await pipeline.close()
+            await storage.close()
+
+    try:
+        result = asyncio.run(process_ticket())
+        duration = time.monotonic() - start_time
+
+        click.echo(_success(f"Processed in {duration:.1f}s"))
+        click.echo()
+        click.echo(f"  Quality score: {result['quality_score']:.1%}")
+        click.echo(f"  Sources used:  {result['sources_count']}")
+
+        if result["gaps"]:
+            click.echo()
+            click.echo(click.style("Identified gaps:", fg="yellow"))
+            for gap in result["gaps"]:
+                click.echo(f"  - {gap}")
+        else:
+            click.echo()
+            click.echo(_success("No gaps identified - context is complete!"))
+
+    except Exception as e:
+        if verbose:
+            import traceback
+
+            click.echo(traceback.format_exc(), err=True)
+        click.echo(_error(f"Failed to process: {e}"), err=True)
+        sys.exit(1)
 
 
 def main() -> None:

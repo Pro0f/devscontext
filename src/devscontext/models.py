@@ -16,7 +16,7 @@ All datetime fields use timezone-aware UTC datetimes.
 
 from __future__ import annotations
 
-from datetime import datetime  # noqa: TC003 - Required at runtime for Pydantic
+from datetime import UTC, datetime
 from typing import Any, Literal
 
 from pydantic import BaseModel, Field
@@ -109,6 +109,57 @@ class CacheConfig(BaseModel):
         return self.ttl_minutes * 60
 
 
+class AgentTriggerConfig(BaseModel):
+    """Configuration for how the pre-processing agent is triggered."""
+
+    type: Literal["polling"] = Field(
+        default="polling",
+        description="Trigger type (polling or webhook in future)",
+    )
+    poll_interval_minutes: int = Field(
+        default=5,
+        ge=1,
+        le=60,
+        description="How often to poll Jira for ready tickets",
+    )
+
+
+class PreprocessorConfig(BaseModel):
+    """Configuration for the pre-processing agent."""
+
+    enabled: bool = Field(default=False, description="Whether agent is enabled")
+    trigger: AgentTriggerConfig = Field(default_factory=AgentTriggerConfig)
+    jira_status: str = Field(
+        default="Ready for Development",
+        description="Jira status that triggers pre-processing",
+    )
+    jira_project: str | list[str] = Field(
+        default="",
+        description="Project key(s) to watch (e.g., 'PROJ' or ['PROJ', 'TEAM'])",
+    )
+    context_ttl_hours: int = Field(
+        default=24,
+        ge=1,
+        le=168,
+        description="How long pre-built context is valid",
+    )
+
+
+class AgentsConfig(BaseModel):
+    """Configuration for background agents."""
+
+    preprocessor: PreprocessorConfig = Field(default_factory=PreprocessorConfig)
+
+
+class StorageConfig(BaseModel):
+    """Configuration for persistent storage."""
+
+    path: str = Field(
+        default=".devscontext/cache.db",
+        description="Path to SQLite database for pre-built context",
+    )
+
+
 class SourcesConfig(BaseModel):
     """Configuration for all data sources."""
 
@@ -123,6 +174,8 @@ class DevsContextConfig(BaseModel):
     sources: SourcesConfig = Field(default_factory=SourcesConfig)
     synthesis: SynthesisConfig = Field(default_factory=SynthesisConfig)
     cache: CacheConfig = Field(default_factory=CacheConfig)
+    agents: AgentsConfig = Field(default_factory=AgentsConfig)
+    storage: StorageConfig = Field(default_factory=StorageConfig)
 
 
 # =============================================================================
@@ -233,7 +286,36 @@ class TaskContext(BaseModel):
     sources_used: list[str] = Field(default_factory=list, description="Sources that contributed")
     fetch_duration_ms: int = Field(..., ge=0, description="How long the fetch took (ms)")
     synthesized_at: datetime = Field(..., description="When context was synthesized (UTC)")
-    cached: bool = Field(default=False, description="Whether served from cache")
+    cached: bool = Field(default=False, description="Whether served from in-memory cache")
+    prebuilt: bool = Field(default=False, description="Whether served from pre-built storage")
+
+
+class PrebuiltContext(BaseModel):
+    """Pre-built context stored in SQLite for instant retrieval."""
+
+    task_id: str = Field(..., description="Task identifier (e.g., 'PROJ-123')")
+    synthesized: str = Field(..., description="Synthesized markdown context")
+    sources_used: list[str] = Field(default_factory=list, description="Sources that contributed")
+    context_quality_score: float = Field(
+        ...,
+        ge=0.0,
+        le=1.0,
+        description="Quality score based on context completeness (0-1)",
+    )
+    gaps: list[str] = Field(
+        default_factory=list,
+        description="Identified gaps (e.g., 'No acceptance criteria')",
+    )
+    built_at: datetime = Field(..., description="When context was built (UTC)")
+    expires_at: datetime = Field(..., description="When context expires (UTC)")
+    source_data_hash: str = Field(
+        ...,
+        description="Hash of Jira ticket.updated for staleness detection",
+    )
+
+    def is_expired(self) -> bool:
+        """Check if this pre-built context has expired."""
+        return datetime.now(UTC) > self.expires_at
 
 
 class ContextData(BaseModel):

@@ -186,7 +186,8 @@ class PluginRegistry:
         primary: dict[str, Adapter] = {}
         for name, adapter in self._adapter_instances.items():
             # Check if adapter config has primary=True
-            if hasattr(adapter._config, "primary") and adapter._config.primary:
+            config = getattr(adapter, "_config", None)
+            if config is not None and getattr(config, "primary", False):
                 primary[name] = adapter
         return primary
 
@@ -202,7 +203,8 @@ class PluginRegistry:
         secondary: dict[str, Adapter] = {}
         for name, adapter in self._adapter_instances.items():
             # Check if adapter config has primary=False or not set
-            if not hasattr(adapter._config, "primary") or not adapter._config.primary:
+            config = getattr(adapter, "_config", None)
+            if config is None or not getattr(config, "primary", False):
                 secondary[name] = adapter
         return secondary
 
@@ -223,9 +225,7 @@ class PluginRegistry:
         if name in self._adapter_classes:
             existing = self._adapter_classes[name]
             if existing is not adapter_class:
-                raise ValueError(
-                    f"Adapter '{name}' already registered by {existing.__module__}"
-                )
+                raise ValueError(f"Adapter '{name}' already registered by {existing.__module__}")
             return  # Already registered same class
 
         self._adapter_classes[name] = adapter_class
@@ -334,7 +334,7 @@ class PluginRegistry:
                 f"got {type(config).__name__}"
             )
 
-        instance = adapter_class(config)
+        instance = adapter_class(config)  # type: ignore[call-arg]
         self._adapter_instances[name] = instance
         logger.debug(f"Created adapter instance: {name}")
 
@@ -380,7 +380,7 @@ class PluginRegistry:
                 f"got {type(config).__name__}"
             )
 
-        instance = plugin_class(config)
+        instance = plugin_class(config)  # type: ignore[call-arg]
         self._synthesis_instance = instance
         logger.debug(f"Created synthesis plugin instance: {name}")
 

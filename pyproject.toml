@@ -29,6 +29,7 @@ dependencies = [
     "pyyaml>=6.0",
     "click>=8.0",
     "pydantic>=2.0",
+    "aiosqlite>=0.20",
 ]
 
 [project.optional-dependencies]
@@ -109,6 +110,7 @@ show_column_numbers = true
 module = [
     "mcp.*",
     "yaml",
+    "aiosqlite",
 ]
 ignore_missing_imports = true
 

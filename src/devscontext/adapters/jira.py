@@ -17,7 +17,7 @@ from __future__ import annotations
 import asyncio
 import time
 from datetime import UTC, datetime
-from typing import TYPE_CHECKING, Any, ClassVar
+from typing import Any, ClassVar
 
 import httpx
 
@@ -39,9 +39,6 @@ from devscontext.models import (
     LinkedIssue,
 )
 from devscontext.plugins.base import Adapter, SearchResult, SourceContext
-
-if TYPE_CHECKING:
-    pass
 
 logger = get_logger(__name__)
 

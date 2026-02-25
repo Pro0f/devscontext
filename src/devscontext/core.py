@@ -31,9 +31,10 @@ from devscontext.logging import get_logger
 from devscontext.models import DocsContext, JiraContext, JiraTicket, MeetingContext, TaskContext
 from devscontext.plugins.base import SourceContext
 from devscontext.plugins.registry import PluginRegistry
+from devscontext.storage import PrebuiltContextStorage
 
 if TYPE_CHECKING:
-    from devscontext.models import DevsContextConfig
+    from devscontext.models import DevsContextConfig, PrebuiltContext
 
 logger = get_logger(__name__)
 
@@ -67,20 +68,27 @@ class DevsContextCore:
                 max_size=config.cache.max_size,
             )
 
+        # Initialize pre-built context storage if configured
+        self._storage: PrebuiltContextStorage | None = None
+        if config.storage.path:
+            self._storage = PrebuiltContextStorage(config.storage.path)
+            self._storage_initialized = False
+        else:
+            self._storage_initialized = True  # No storage to initialize
+
         # Initialize plugin registry
         self._registry = PluginRegistry()
         self._registry.register_builtin_plugins()
         self._registry.discover_plugins()
         self._registry.load_from_config(config)
 
+        synthesis = self._registry.get_synthesis()
         logger.info(
             "DevsContextCore initialized",
             extra={
                 "cache_enabled": config.cache.enabled,
                 "adapters_loaded": list(self._registry.get_active_adapters().keys()),
-                "synthesis_plugin": (
-                    self._registry.get_synthesis().name if self._registry.get_synthesis() else None
-                ),
+                "synthesis_plugin": synthesis.name if synthesis else None,
             },
         )
 
@@ -105,7 +113,28 @@ class DevsContextCore:
         start_time = time.monotonic()
         cache_key = f"context:{task_id}"
 
-        # Check cache
+        # Check pre-built context storage first (instant return with rich context)
+        if use_cache and self._storage is not None:
+            prebuilt = await self._get_prebuilt_context(task_id)
+            if prebuilt is not None and not prebuilt.is_expired():
+                logger.info(
+                    "Pre-built context hit",
+                    extra={
+                        "task_id": task_id,
+                        "quality_score": prebuilt.context_quality_score,
+                    },
+                )
+                return TaskContext(
+                    task_id=task_id,
+                    synthesized=prebuilt.synthesized,
+                    sources_used=prebuilt.sources_used,
+                    fetch_duration_ms=0,
+                    synthesized_at=prebuilt.built_at,
+                    cached=True,
+                    prebuilt=True,
+                )
+
+        # Check in-memory cache
         if use_cache and self._cache is not None:
             cached = self._cache.get(cache_key)
             if cached is not None:
@@ -134,8 +163,7 @@ class DevsContextCore:
                 sources_used.append(f"jira:{ctx.data.ticket.ticket_id}")
             elif name == "fireflies" and isinstance(ctx.data, MeetingContext):
                 sources_used.extend(
-                    f"fireflies:{m.meeting_date.strftime('%Y-%m-%d')}"
-                    for m in ctx.data.meetings
+                    f"fireflies:{m.meeting_date.strftime('%Y-%m-%d')}" for m in ctx.data.meetings
                 )
             elif name == "local_docs" and isinstance(ctx.data, DocsContext):
                 sources_used.extend(f"docs:{s.file_path}" for s in ctx.data.sections)
@@ -351,21 +379,21 @@ class DevsContextCore:
         jira = self._registry.get_adapter("jira")
         if jira is None:
             return []
-        return await jira.search_issues(query, max_results=5)
+        return await jira.search_issues(query, max_results=5)  # type: ignore[attr-defined,no-any-return]
 
     async def _search_meetings(self, query: str) -> MeetingContext:
         """Search meeting transcripts for query."""
         fireflies = self._registry.get_adapter("fireflies")
         if fireflies is None:
             return MeetingContext(meetings=[])
-        return await fireflies.get_meeting_context(query)
+        return await fireflies.get_meeting_context(query)  # type: ignore[attr-defined,no-any-return]
 
     async def _search_docs(self, query: str) -> DocsContext:
         """Search local documentation for query."""
         docs = self._registry.get_adapter("local_docs")
         if docs is None:
             return DocsContext(sections=[])
-        return await docs.search_docs(query, max_results=5)
+        return await docs.search_docs(query, max_results=5)  # type: ignore[attr-defined,no-any-return]
 
     def _format_jira_search_results(self, tickets: list[JiraTicket]) -> str:
         """Format Jira search results as markdown."""
@@ -425,8 +453,8 @@ class DevsContextCore:
             content = self._get_standards_not_configured_message()
             section_count = 0
         else:
-            docs_context = await docs.get_standards(area)
-            available_areas = await docs.list_standards_areas()
+            docs_context = await docs.get_standards(area)  # type: ignore[attr-defined]
+            available_areas = await docs.list_standards_areas()  # type: ignore[attr-defined]
 
             if docs_context.sections:
                 # Format sections into markdown with header
@@ -520,6 +548,35 @@ No standards found for "{area}".
 Try one of the areas above, or omit the area parameter to see all standards.
 """
 
+    async def _get_prebuilt_context(self, task_id: str) -> PrebuiltContext | None:
+        """Get pre-built context from storage, initializing if needed.
+
+        Args:
+            task_id: Task identifier.
+
+        Returns:
+            PrebuiltContext if found, None otherwise.
+        """
+        if self._storage is None:
+            return None
+
+        try:
+            # Initialize storage on first access
+            if not self._storage_initialized:
+                await self._storage.initialize()
+                self._storage_initialized = True
+
+            return await self._storage.get(task_id)
+
+        except Exception as e:
+            logger.warning(
+                "Failed to get pre-built context",
+                extra={"task_id": task_id, "error": str(e)},
+            )
+            return None
+
     async def close(self) -> None:
         """Close all adapter connections and clean up resources."""
         await self._registry.close_all()
+        if self._storage is not None:
+            await self._storage.close()
