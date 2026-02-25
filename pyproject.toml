@@ -111,6 +111,7 @@ module = [
     "mcp.*",
     "yaml",
     "aiosqlite",
+    "jinja2",
 ]
 ignore_missing_imports = true
 

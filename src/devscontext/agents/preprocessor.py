@@ -466,14 +466,30 @@ class PreprocessingPipeline:
         # === Pass 3: Gap Detection ===
         logger.debug("Pass 3: Detecting gaps")
 
+        # Rule-based gap detection (reliable, consistent)
+        rule_gaps = self._detect_gaps(jira_ctx, meeting_ctx, docs_ctx)
+
+        # LLM-based gap detection (additional insights)
         gap_prompt = GAP_DETECTION_PROMPT.format(context=synthesized)
         gap_response = await provider.generate(gap_prompt, max_tokens=500)
-        gaps = self._parse_gaps(gap_response)
+        llm_gaps = self._parse_gaps(gap_response)
+
+        # Merge gaps (rule-based first, then unique LLM gaps)
+        all_gaps = list(rule_gaps)
+        existing_lower = {g.lower() for g in all_gaps}
+        for gap in llm_gaps:
+            if gap.lower() not in existing_lower:
+                all_gaps.append(gap)
+                existing_lower.add(gap.lower())
 
         # === Calculate Quality Score ===
         quality_score = self._calculate_quality_score(jira_ctx, meeting_ctx, docs_ctx)
 
-        return synthesized, quality_score, gaps
+        # === Append Gaps to Synthesized Context ===
+        if all_gaps:
+            synthesized = self._append_gaps_to_context(synthesized, all_gaps, quality_score)
+
+        return synthesized, quality_score, all_gaps
 
     def _format_jira_for_extraction(self, ctx: JiraContext) -> str:
         """Format Jira context for extraction prompt."""
@@ -579,41 +595,180 @@ class PreprocessingPipeline:
     ) -> float:
         """Calculate context quality score based on completeness.
 
-        Score components (0-1 each, averaged):
-        - Has description: 0.2
-        - Has acceptance criteria: 0.2
-        - Has meeting context: 0.2
-        - Has architecture docs: 0.2
-        - Has coding standards: 0.2
+        Scoring rubric (each dimension 0-1, averaged):
+        1. Has clear requirements/acceptance criteria
+        2. Has implementation decisions (meeting context)
+        3. Has architecture context (relevant docs)
+        4. Has coding standards (standards docs)
+        5. Has related work context (linked issues)
 
         Returns:
             Quality score between 0 and 1.
         """
-        score = 0.0
+        dimensions: list[float] = []
 
-        # Has description (0.2)
-        if jira_ctx.ticket.description:
-            score += 0.2
+        # 1. Has clear requirements or acceptance criteria
+        has_requirements = bool(
+            jira_ctx.ticket.acceptance_criteria
+            or (jira_ctx.ticket.description and len(jira_ctx.ticket.description) > 100)
+        )
+        dimensions.append(1.0 if has_requirements else 0.0)
 
-        # Has acceptance criteria (0.2)
-        if jira_ctx.ticket.acceptance_criteria:
-            score += 0.2
+        # 2. Has implementation decisions (meeting context)
+        has_meetings = bool(meeting_ctx.meetings)
+        dimensions.append(1.0 if has_meetings else 0.0)
 
-        # Has meeting context (0.2)
-        if meeting_ctx.meetings:
-            score += 0.2
-
-        # Has architecture docs (0.2)
+        # 3. Has architecture context (relevant docs matched)
         has_arch = any(s.doc_type == "architecture" for s in docs_ctx.sections)
-        if has_arch:
-            score += 0.2
+        dimensions.append(1.0 if has_arch else 0.0)
 
-        # Has coding standards (0.2)
+        # 4. Has coding standards (standards docs included)
         has_standards = any(s.doc_type == "standards" for s in docs_ctx.sections)
-        if has_standards:
-            score += 0.2
+        dimensions.append(1.0 if has_standards else 0.0)
 
-        return score
+        # 5. Has related work context (linked issues exist)
+        has_related = bool(jira_ctx.linked_issues)
+        dimensions.append(1.0 if has_related else 0.0)
+
+        # Return average of all dimensions
+        return sum(dimensions) / len(dimensions) if dimensions else 0.0
+
+    def _detect_gaps(
+        self,
+        jira_ctx: JiraContext,
+        meeting_ctx: MeetingContext,
+        docs_ctx: DocsContext,
+    ) -> list[str]:
+        """Detect specific gaps in context and return actionable messages.
+
+        Checks for:
+        - Missing acceptance criteria
+        - Missing meeting discussions
+        - Missing architecture documentation
+        - Missing coding standards
+        - Missing linked/related tickets
+
+        Returns:
+            List of actionable gap messages.
+        """
+        gaps: list[str] = []
+
+        # Check for acceptance criteria
+        if not jira_ctx.ticket.acceptance_criteria:
+            gaps.append(
+                "No acceptance criteria found in Jira ticket — "
+                "consider adding clear done criteria before implementation"
+            )
+
+        # Check for meeting discussions
+        if not meeting_ctx.meetings:
+            gaps.append(
+                "No meeting discussions found for this task — "
+                "consider a planning discussion with the team"
+            )
+
+        # Check for architecture documentation
+        has_arch = any(s.doc_type == "architecture" for s in docs_ctx.sections)
+        if not has_arch:
+            # Try to identify the service area from components or labels
+            service_area = None
+            if jira_ctx.ticket.components:
+                service_area = jira_ctx.ticket.components[0]
+            elif jira_ctx.ticket.labels:
+                service_area = jira_ctx.ticket.labels[0]
+
+            if service_area:
+                gaps.append(
+                    f"No architecture documentation found for service area '{service_area}' — "
+                    "consider documenting the architectural approach"
+                )
+            else:
+                gaps.append(
+                    "No architecture documentation found — "
+                    "consider documenting the architectural approach for this feature"
+                )
+
+        # Check for coding standards
+        has_standards = any(s.doc_type == "standards" for s in docs_ctx.sections)
+        if not has_standards:
+            gaps.append(
+                "No coding standards documentation found — "
+                "check if CLAUDE.md or standards/ docs exist in the repository"
+            )
+
+        # Check for linked/related tickets
+        if not jira_ctx.linked_issues:
+            gaps.append(
+                "No linked or related tickets — "
+                "this task may lack broader context; consider linking related work"
+            )
+
+        # Additional checks from comments and description
+        ticket = jira_ctx.ticket
+        description = (ticket.description or "").lower()
+
+        # Check for unclear dependencies
+        no_ac = not ticket.acceptance_criteria
+        no_depends_mention = "depends" not in description and "blocked" not in description
+        if no_ac and no_depends_mention and not jira_ctx.linked_issues:
+            gaps.append(
+                "No dependencies identified — "
+                "verify this task has no blocking dependencies before starting"
+            )
+
+        return gaps
+
+    def _append_gaps_to_context(
+        self,
+        synthesized: str,
+        gaps: list[str],
+        quality_score: float,
+    ) -> str:
+        """Append identified gaps to the synthesized context.
+
+        Adds a section at the end of the context to inform the AI agent
+        about missing information that may affect implementation.
+
+        Args:
+            synthesized: The synthesized context markdown.
+            gaps: List of identified gaps.
+            quality_score: The calculated quality score.
+
+        Returns:
+            Synthesized context with gaps section appended.
+        """
+        if not gaps:
+            return synthesized
+
+        # Format quality indicator
+        if quality_score >= 0.8:
+            quality_label = "Good"
+        elif quality_score >= 0.6:
+            quality_label = "Moderate"
+        elif quality_score >= 0.4:
+            quality_label = "Limited"
+        else:
+            quality_label = "Incomplete"
+
+        gaps_section = f"""
+
+---
+
+## ⚠️ Context Quality: {quality_label} ({quality_score:.0%})
+
+The following gaps were identified in the available context.
+Consider addressing these before or during implementation:
+
+"""
+        for gap in gaps:
+            gaps_section += f"- {gap}\n"
+
+        gaps_section += """
+*These gaps were automatically detected during context preprocessing.*
+*Some may not be relevant to your specific task.*
+"""
+
+        return synthesized + gaps_section
 
     async def close(self) -> None:
         """Close resources."""

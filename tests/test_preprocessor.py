@@ -365,3 +365,186 @@ class TestPreprocessingPipelineIntegration:
 
             with pytest.raises(ValueError, match="Could not fetch Jira ticket"):
                 await pipeline.process("NONEXISTENT-999")
+
+
+class TestGapDetection:
+    """Tests for gap detection functionality."""
+
+    def test_detect_gaps_no_acceptance_criteria(self, config: DevsContextConfig) -> None:
+        """Test gap detected when no acceptance criteria."""
+        storage = MagicMock(spec=PrebuiltContextStorage)
+        pipeline = PreprocessingPipeline(config, storage)
+
+        now = datetime.now(UTC)
+        jira_ctx = JiraContext(
+            ticket=JiraTicket(
+                ticket_id="TEST-1",
+                title="Test ticket",
+                description="Some description",
+                status="Open",
+                created=now,
+                updated=now,
+                acceptance_criteria=None,  # No AC
+            ),
+            comments=[],
+            linked_issues=[],
+        )
+
+        gaps = pipeline._detect_gaps(
+            jira_ctx,
+            MeetingContext(meetings=[]),
+            DocsContext(sections=[]),
+        )
+
+        assert any("acceptance criteria" in g.lower() for g in gaps)
+
+    def test_detect_gaps_no_meetings(
+        self, config: DevsContextConfig, sample_jira_context: JiraContext
+    ) -> None:
+        """Test gap detected when no meeting discussions."""
+        storage = MagicMock(spec=PrebuiltContextStorage)
+        pipeline = PreprocessingPipeline(config, storage)
+
+        gaps = pipeline._detect_gaps(
+            sample_jira_context,
+            MeetingContext(meetings=[]),  # No meetings
+            DocsContext(sections=[]),
+        )
+
+        assert any("meeting" in g.lower() for g in gaps)
+
+    def test_detect_gaps_no_architecture_docs(
+        self, config: DevsContextConfig, sample_jira_context: JiraContext
+    ) -> None:
+        """Test gap detected when no architecture documentation."""
+        storage = MagicMock(spec=PrebuiltContextStorage)
+        pipeline = PreprocessingPipeline(config, storage)
+
+        # Only standards docs, no architecture
+        docs_ctx = DocsContext(
+            sections=[
+                DocSection(
+                    file_path="CLAUDE.md",
+                    section_title="Standards",
+                    content="Coding standards",
+                    doc_type="standards",
+                )
+            ]
+        )
+
+        gaps = pipeline._detect_gaps(
+            sample_jira_context,
+            MeetingContext(meetings=[]),
+            docs_ctx,
+        )
+
+        # Should include service area from components
+        assert any("architecture" in g.lower() for g in gaps)
+        assert any("backend" in g.lower() for g in gaps)  # component name
+
+    def test_detect_gaps_no_linked_issues(self, config: DevsContextConfig) -> None:
+        """Test gap detected when no linked issues."""
+        storage = MagicMock(spec=PrebuiltContextStorage)
+        pipeline = PreprocessingPipeline(config, storage)
+
+        now = datetime.now(UTC)
+        jira_ctx = JiraContext(
+            ticket=JiraTicket(
+                ticket_id="TEST-1",
+                title="Test ticket",
+                description="Some description",
+                status="Open",
+                acceptance_criteria="Done when X",
+                created=now,
+                updated=now,
+            ),
+            comments=[],
+            linked_issues=[],  # No linked issues
+        )
+
+        gaps = pipeline._detect_gaps(
+            jira_ctx,
+            MeetingContext(meetings=[]),
+            DocsContext(sections=[]),
+        )
+
+        assert any("linked" in g.lower() or "related" in g.lower() for g in gaps)
+
+    def test_detect_gaps_complete_context(
+        self,
+        config: DevsContextConfig,
+        sample_jira_context: JiraContext,
+        sample_meeting_context: MeetingContext,
+        sample_docs_context: DocsContext,
+    ) -> None:
+        """Test minimal gaps when context is complete."""
+        storage = MagicMock(spec=PrebuiltContextStorage)
+        pipeline = PreprocessingPipeline(config, storage)
+
+        gaps = pipeline._detect_gaps(
+            sample_jira_context,
+            sample_meeting_context,
+            sample_docs_context,
+        )
+
+        # With complete context, should have no or minimal gaps
+        # (may still flag missing dependencies check)
+        assert len(gaps) <= 1
+
+
+class TestAppendGapsToContext:
+    """Tests for appending gaps to synthesized context."""
+
+    def test_append_gaps_adds_section(self, config: DevsContextConfig) -> None:
+        """Test that gaps are appended as a section."""
+        storage = MagicMock(spec=PrebuiltContextStorage)
+        pipeline = PreprocessingPipeline(config, storage)
+
+        synthesized = "# Task Context\n\nSome content here."
+        gaps = ["No acceptance criteria", "No meeting discussions"]
+        quality_score = 0.4
+
+        result = pipeline._append_gaps_to_context(synthesized, gaps, quality_score)
+
+        assert "# Task Context" in result  # Original content preserved
+        assert "Context Quality" in result
+        assert "40%" in result  # Quality score
+        assert "No acceptance criteria" in result
+        assert "No meeting discussions" in result
+
+    def test_append_gaps_empty_list(self, config: DevsContextConfig) -> None:
+        """Test that empty gaps list returns original content."""
+        storage = MagicMock(spec=PrebuiltContextStorage)
+        pipeline = PreprocessingPipeline(config, storage)
+
+        synthesized = "# Task Context\n\nSome content here."
+        gaps: list[str] = []
+        quality_score = 1.0
+
+        result = pipeline._append_gaps_to_context(synthesized, gaps, quality_score)
+
+        assert result == synthesized  # Unchanged
+
+    def test_append_gaps_quality_labels(self, config: DevsContextConfig) -> None:
+        """Test quality labels based on score."""
+        storage = MagicMock(spec=PrebuiltContextStorage)
+        pipeline = PreprocessingPipeline(config, storage)
+
+        synthesized = "Content"
+        gaps = ["A gap"]
+
+        # Good (>=0.8)
+        result = pipeline._append_gaps_to_context(synthesized, gaps, 0.9)
+        assert "Good" in result
+
+        # Moderate (>=0.6)
+        result = pipeline._append_gaps_to_context(synthesized, gaps, 0.7)
+        assert "Moderate" in result
+
+        # Limited (>=0.4)
+        result = pipeline._append_gaps_to_context(synthesized, gaps, 0.5)
+        assert "Limited" in result
+
+        # Incomplete (<0.4)
+        result = pipeline._append_gaps_to_context(synthesized, gaps, 0.2)
+        assert "Incomplete" in result
