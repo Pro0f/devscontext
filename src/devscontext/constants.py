@@ -78,6 +78,8 @@ LOG_DATE_FORMAT: Final[str] = "%Y-%m-%d %H:%M:%S"
 ADAPTER_JIRA: Final[str] = "jira"
 ADAPTER_FIREFLIES: Final[str] = "fireflies"
 ADAPTER_LOCAL_DOCS: Final[str] = "local_docs"
+ADAPTER_SLACK: Final[str] = "slack"
+ADAPTER_GMAIL: Final[str] = "gmail"
 
 # =============================================================================
 # SOURCE TYPES
@@ -85,3 +87,23 @@ ADAPTER_LOCAL_DOCS: Final[str] = "local_docs"
 SOURCE_TYPE_ISSUE_TRACKER: Final[str] = "issue_tracker"
 SOURCE_TYPE_MEETING: Final[str] = "meeting"
 SOURCE_TYPE_DOCUMENTATION: Final[str] = "documentation"
+SOURCE_TYPE_COMMUNICATION: Final[str] = "communication"
+SOURCE_TYPE_EMAIL: Final[str] = "email"
+
+# =============================================================================
+# SLACK API
+# =============================================================================
+SLACK_API_BASE_URL: Final[str] = "https://slack.com/api"
+SLACK_RATE_LIMIT_REQUESTS_PER_MINUTE: Final[int] = 50
+SLACK_CHANNEL_HISTORY_CACHE_TTL: Final[int] = 300  # 5 minutes
+SLACK_MAX_MESSAGES_PER_CHANNEL: Final[int] = 100
+SLACK_THREAD_REPLY_LIMIT: Final[int] = 50
+
+# =============================================================================
+# GMAIL API
+# =============================================================================
+GMAIL_API_SCOPES: Final[tuple[str, ...]] = (
+    "https://www.googleapis.com/auth/gmail.readonly",
+)
+GMAIL_BODY_MAX_CHARS: Final[int] = 5000
+GMAIL_MAX_RESULTS_PER_QUERY: Final[int] = 25

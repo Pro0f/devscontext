@@ -61,6 +61,60 @@ class DocsConfig(BaseModel):
     primary: bool = Field(default=False, description="Whether this is a primary source")
 
 
+class SlackConfig(BaseModel):
+    """Slack adapter configuration."""
+
+    bot_token: str = Field(default="", description="Slack bot token (from env)")
+    channels: list[str] = Field(
+        default_factory=list,
+        description="Channel names to search (e.g., ['engineering', 'payments-team'])",
+    )
+    include_threads: bool = Field(default=True, description="Fetch full threads for matches")
+    max_messages: int = Field(
+        default=20,
+        ge=1,
+        le=100,
+        description="Max messages to return per search",
+    )
+    lookback_days: int = Field(
+        default=30,
+        ge=1,
+        le=90,
+        description="Days to look back when searching",
+    )
+    enabled: bool = Field(default=False, description="Whether adapter is enabled")
+    primary: bool = Field(default=False, description="Whether this is a primary source")
+
+
+class GmailConfig(BaseModel):
+    """Gmail adapter configuration."""
+
+    credentials_path: str = Field(
+        default="",
+        description="Path to OAuth2 credentials JSON (from env)",
+    )
+    token_path: str = Field(
+        default=".devscontext/gmail_token.json",
+        description="Path to store OAuth2 refresh token",
+    )
+    search_scope: str = Field(
+        default="newer_than:30d",
+        description="Gmail search scope filter",
+    )
+    max_results: int = Field(
+        default=10,
+        ge=1,
+        le=50,
+        description="Max emails to return",
+    )
+    labels: list[str] = Field(
+        default_factory=lambda: ["INBOX"],
+        description="Labels to search within",
+    )
+    enabled: bool = Field(default=False, description="Whether adapter is enabled")
+    primary: bool = Field(default=False, description="Whether this is a primary source")
+
+
 class SynthesisConfig(BaseModel):
     """Synthesis configuration supporting multiple synthesis plugins."""
 
@@ -166,6 +220,8 @@ class SourcesConfig(BaseModel):
     jira: JiraConfig = Field(default_factory=JiraConfig)
     fireflies: FirefliesConfig = Field(default_factory=FirefliesConfig)
     docs: DocsConfig = Field(default_factory=DocsConfig)
+    slack: SlackConfig = Field(default_factory=SlackConfig)
+    gmail: GmailConfig = Field(default_factory=GmailConfig)
 
 
 class DevsContextConfig(BaseModel):
@@ -248,6 +304,83 @@ class MeetingContext(BaseModel):
     """All meeting context found for a task."""
 
     meetings: list[MeetingExcerpt] = Field(default_factory=list, description="Meeting excerpts")
+
+
+# =============================================================================
+# SLACK DATA MODELS
+# =============================================================================
+
+
+class SlackMessage(BaseModel):
+    """A single Slack message."""
+
+    message_id: str = Field(..., description="Slack message timestamp (ts)")
+    channel_id: str = Field(..., description="Channel ID where message was posted")
+    channel_name: str = Field(..., description="Channel name (human readable)")
+    user_id: str = Field(..., description="User ID who sent the message")
+    user_name: str = Field(..., description="User display name")
+    text: str = Field(..., description="Message text content")
+    timestamp: datetime = Field(..., description="When message was sent (UTC)")
+    thread_ts: str | None = Field(default=None, description="Parent thread timestamp if reply")
+    permalink: str | None = Field(default=None, description="Permalink to the message")
+    reactions: list[str] = Field(default_factory=list, description="Reaction emojis on message")
+
+
+class SlackThread(BaseModel):
+    """A Slack thread with parent message and replies."""
+
+    parent_message: SlackMessage = Field(..., description="The thread's parent message")
+    replies: list[SlackMessage] = Field(default_factory=list, description="Reply messages")
+    participant_names: list[str] = Field(default_factory=list, description="Unique participants")
+    decisions: list[str] = Field(default_factory=list, description="Decisions identified in thread")
+    action_items: list[str] = Field(default_factory=list, description="Action items from thread")
+
+
+class SlackContext(BaseModel):
+    """All Slack context found for a task."""
+
+    threads: list[SlackThread] = Field(default_factory=list, description="Relevant threads")
+    standalone_messages: list[SlackMessage] = Field(
+        default_factory=list,
+        description="Relevant messages not in threads",
+    )
+
+
+# =============================================================================
+# GMAIL DATA MODELS
+# =============================================================================
+
+
+class GmailMessage(BaseModel):
+    """A single Gmail message."""
+
+    message_id: str = Field(..., description="Gmail message ID")
+    thread_id: str = Field(..., description="Gmail thread/conversation ID")
+    subject: str = Field(..., description="Email subject line")
+    sender: str = Field(..., description="Sender email address")
+    sender_name: str | None = Field(default=None, description="Sender display name")
+    recipients: list[str] = Field(default_factory=list, description="To recipients")
+    cc: list[str] = Field(default_factory=list, description="CC recipients")
+    date: datetime = Field(..., description="When email was sent (UTC)")
+    snippet: str = Field(default="", description="Short preview of email body")
+    body_text: str = Field(default="", description="Plain text body content")
+    labels: list[str] = Field(default_factory=list, description="Gmail labels")
+
+
+class GmailThread(BaseModel):
+    """A Gmail conversation thread."""
+
+    thread_id: str = Field(..., description="Gmail thread ID")
+    subject: str = Field(..., description="Thread subject (from first message)")
+    messages: list[GmailMessage] = Field(default_factory=list, description="Messages in thread")
+    participants: list[str] = Field(default_factory=list, description="All participants")
+    latest_date: datetime = Field(..., description="Most recent message date")
+
+
+class GmailContext(BaseModel):
+    """All Gmail context found for a task."""
+
+    threads: list[GmailThread] = Field(default_factory=list, description="Relevant email threads")
 
 
 # =============================================================================

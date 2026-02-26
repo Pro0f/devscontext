@@ -35,8 +35,10 @@ from devscontext.plugins.base import SourceContext, SynthesisPlugin
 if TYPE_CHECKING:
     from devscontext.models import (
         DocsContext,
+        GmailContext,
         JiraContext,
         MeetingContext,
+        SlackContext,
     )
 
 logger = get_logger(__name__)
@@ -58,6 +60,8 @@ Rules:
   ## Task: {task_id} — {title}
   ### Requirements
   ### Key Decisions
+  ### Team Discussions
+  ### External Context
   ### Architecture Context
   ### Coding Standards
   ### Related Work
@@ -75,9 +79,24 @@ Section-specific guidance:
 - Include any constraints mentioned in comments
 
 ### Key Decisions
-- Extract from meeting transcripts and ticket comments
+- Extract from meeting transcripts and formal decision records
 - Include WHO made the decision, WHEN, and WHY
 - Focus on technical decisions that affect implementation
+- Distinguish from informal team discussions
+
+### Team Discussions
+- Extract from Slack threads and informal communications
+- Focus on clarifications, feedback, and informal agreements
+- Note any concerns or open questions raised
+- Include action items assigned to team members
+- Mark as [Slack] to distinguish from formal decisions
+
+### External Context
+- Extract from email threads with stakeholders or customers
+- Focus on requirements clarifications from product/business
+- Include customer feedback or constraints
+- Note any deadlines or commitments mentioned
+- Mark as [Email] to distinguish from internal discussions
 
 ### Architecture Context
 - Focus on ACTIONABLE details from architecture docs:
@@ -444,11 +463,72 @@ class LLMSynthesisPlugin(SynthesisPlugin):
 
         return "\n".join(parts)
 
+    def _format_slack_context(self, ctx: SlackContext) -> str:
+        """Format Slack context as raw data for the prompt."""
+        if not ctx.threads and not ctx.standalone_messages:
+            return ""
+
+        parts = ["## SLACK DISCUSSIONS"]
+        parts.append("*Informal team communications and discussions.*\n")
+
+        for thread in ctx.threads:
+            date_str = thread.parent_message.timestamp.strftime("%Y-%m-%d")
+            parts.append(f"\n### Thread in #{thread.parent_message.channel_name} ({date_str})")
+            parts.append(f"**Participants:** {', '.join(thread.participant_names)}")
+
+            parts.append(f"\n**{thread.parent_message.user_name}:** {thread.parent_message.text}")
+
+            for reply in thread.replies[:5]:
+                parts.append(f"**{reply.user_name}:** {reply.text}")
+
+            if thread.decisions:
+                parts.append("\n**Informal Decisions:**")
+                for d in thread.decisions:
+                    parts.append(f"- {d}")
+
+            if thread.action_items:
+                parts.append("\n**Action Items:**")
+                for a in thread.action_items:
+                    parts.append(f"- {a}")
+
+        for msg in ctx.standalone_messages[:5]:
+            date_str = msg.timestamp.strftime("%Y-%m-%d")
+            parts.append(f"\n**#{msg.channel_name}** ({date_str})")
+            parts.append(f"**{msg.user_name}:** {msg.text}")
+
+        return "\n".join(parts)
+
+    def _format_gmail_context(self, ctx: GmailContext) -> str:
+        """Format Gmail context as raw data for the prompt."""
+        if not ctx.threads:
+            return ""
+
+        parts = ["## EMAIL CONTEXT"]
+        parts.append("*External communications with stakeholders, customers, etc.*\n")
+
+        for thread in ctx.threads:
+            parts.append(f"\n### Email Thread: {thread.subject}")
+            parts.append(f"**Participants:** {', '.join(thread.participants[:5])}")
+            parts.append(f"**Latest:** {thread.latest_date.strftime('%Y-%m-%d')}")
+
+            for msg in thread.messages[:3]:
+                sender = msg.sender_name or msg.sender
+                date_str = msg.date.strftime("%Y-%m-%d")
+                parts.append(f"\n**{sender}** ({date_str}):")
+                body = msg.body_text or msg.snippet
+                if len(body) > 500:
+                    body = body[:500] + "..."
+                parts.append(body)
+
+        return "\n".join(parts)
+
     def _build_raw_data(
         self,
         jira_context: JiraContext | None,
         meeting_context: MeetingContext | None,
         docs_context: DocsContext | None,
+        slack_context: SlackContext | None = None,
+        gmail_context: GmailContext | None = None,
     ) -> str:
         """Build the raw data section for the synthesis prompt.
 
@@ -456,6 +536,8 @@ class LLMSynthesisPlugin(SynthesisPlugin):
             jira_context: Jira ticket context (if available).
             meeting_context: Meeting transcripts context (if available).
             docs_context: Documentation context (if available).
+            slack_context: Slack discussions context (if available).
+            gmail_context: Gmail email context (if available).
 
         Returns:
             Formatted raw data string.
@@ -466,9 +548,17 @@ class LLMSynthesisPlugin(SynthesisPlugin):
         if jira_context and jira_context.ticket:
             sections.append(self._format_jira_context(jira_context))
 
-        # Meeting transcripts
+        # Meeting transcripts (formal decisions)
         if meeting_context and meeting_context.meetings:
             sections.append(self._format_meeting_context(meeting_context))
+
+        # Slack discussions (informal team communications)
+        if slack_context and (slack_context.threads or slack_context.standalone_messages):
+            sections.append(self._format_slack_context(slack_context))
+
+        # Email context (external communications)
+        if gmail_context and gmail_context.threads:
+            sections.append(self._format_gmail_context(gmail_context))
 
         # Documentation - split by type for better synthesis
         if docs_context and docs_context.sections:
@@ -498,6 +588,8 @@ class LLMSynthesisPlugin(SynthesisPlugin):
         jira_context: JiraContext | None,
         meeting_context: MeetingContext | None,
         docs_context: DocsContext | None,
+        slack_context: SlackContext | None = None,
+        gmail_context: GmailContext | None = None,
     ) -> str:
         """Format context as plain markdown when LLM synthesis fails.
 
@@ -508,6 +600,8 @@ class LLMSynthesisPlugin(SynthesisPlugin):
             jira_context: Jira ticket context (if available).
             meeting_context: Meeting transcripts context (if available).
             docs_context: Documentation context (if available).
+            slack_context: Slack discussions context (if available).
+            gmail_context: Gmail email context (if available).
 
         Returns:
             Plain markdown formatted context.
@@ -515,7 +609,9 @@ class LLMSynthesisPlugin(SynthesisPlugin):
         parts = [f"## Task: {task_id}"]
         parts.append("\n*Note: LLM synthesis unavailable, showing raw context.*\n")
 
-        raw_data = self._build_raw_data(jira_context, meeting_context, docs_context)
+        raw_data = self._build_raw_data(
+            jira_context, meeting_context, docs_context, slack_context, gmail_context
+        )
         parts.append(raw_data)
 
         return "\n".join(parts)
@@ -539,11 +635,19 @@ class LLMSynthesisPlugin(SynthesisPlugin):
             Synthesized markdown context, or fallback raw format on error.
         """
         # Extract typed contexts from source_contexts
-        from devscontext.models import DocsContext, JiraContext, MeetingContext
+        from devscontext.models import (
+            DocsContext,
+            GmailContext,
+            JiraContext,
+            MeetingContext,
+            SlackContext,
+        )
 
         jira_context: JiraContext | None = None
         meeting_context: MeetingContext | None = None
         docs_context: DocsContext | None = None
+        slack_context: SlackContext | None = None
+        gmail_context: GmailContext | None = None
 
         for _name, ctx in source_contexts.items():
             if ctx.is_empty():
@@ -555,9 +659,15 @@ class LLMSynthesisPlugin(SynthesisPlugin):
                 meeting_context = ctx.data
             elif isinstance(ctx.data, DocsContext):
                 docs_context = ctx.data
+            elif isinstance(ctx.data, SlackContext):
+                slack_context = ctx.data
+            elif isinstance(ctx.data, GmailContext):
+                gmail_context = ctx.data
 
         # Build raw data
-        raw_data = self._build_raw_data(jira_context, meeting_context, docs_context)
+        raw_data = self._build_raw_data(
+            jira_context, meeting_context, docs_context, slack_context, gmail_context
+        )
 
         if raw_data == "No context data available.":
             return f"## Task: {task_id}\n\nNo context found for this task."
@@ -593,21 +703,27 @@ class LLMSynthesisPlugin(SynthesisPlugin):
                 "LLM provider not available, using fallback",
                 extra={"error": str(e), "provider": self._config.provider},
             )
-            return self._format_fallback(task_id, jira_context, meeting_context, docs_context)
+            return self._format_fallback(
+                task_id, jira_context, meeting_context, docs_context, slack_context, gmail_context
+            )
 
         except ValueError as e:
             logger.warning(
                 "LLM configuration error, using fallback",
                 extra={"error": str(e), "provider": self._config.provider},
             )
-            return self._format_fallback(task_id, jira_context, meeting_context, docs_context)
+            return self._format_fallback(
+                task_id, jira_context, meeting_context, docs_context, slack_context, gmail_context
+            )
 
         except Exception as e:
             logger.warning(
                 "LLM synthesis failed, using fallback",
                 extra={"error": str(e), "provider": self._config.provider},
             )
-            return self._format_fallback(task_id, jira_context, meeting_context, docs_context)
+            return self._format_fallback(
+                task_id, jira_context, meeting_context, docs_context, slack_context, gmail_context
+            )
 
 
 # =============================================================================
@@ -680,6 +796,8 @@ class TemplateSynthesisPlugin(SynthesisPlugin):
         - jira: JiraContext if available
         - meetings: MeetingContext if available
         - docs: DocsContext if available
+        - slack: SlackContext if available
+        - gmail: GmailContext if available
 
         Args:
             task_id: The task identifier.
@@ -688,12 +806,20 @@ class TemplateSynthesisPlugin(SynthesisPlugin):
         Returns:
             Rendered template output.
         """
-        from devscontext.models import DocsContext, JiraContext, MeetingContext
+        from devscontext.models import (
+            DocsContext,
+            GmailContext,
+            JiraContext,
+            MeetingContext,
+            SlackContext,
+        )
 
         # Extract typed contexts
         jira_context: JiraContext | None = None
         meeting_context: MeetingContext | None = None
         docs_context: DocsContext | None = None
+        slack_context: SlackContext | None = None
+        gmail_context: GmailContext | None = None
 
         for _name, ctx in source_contexts.items():
             if ctx.is_empty():
@@ -704,6 +830,10 @@ class TemplateSynthesisPlugin(SynthesisPlugin):
                 meeting_context = ctx.data
             elif isinstance(ctx.data, DocsContext):
                 docs_context = ctx.data
+            elif isinstance(ctx.data, SlackContext):
+                slack_context = ctx.data
+            elif isinstance(ctx.data, GmailContext):
+                gmail_context = ctx.data
 
         try:
             template = self._get_template()
@@ -714,6 +844,8 @@ class TemplateSynthesisPlugin(SynthesisPlugin):
                     jira=jira_context,
                     meetings=meeting_context,
                     docs=docs_context,
+                    slack=slack_context,
+                    gmail=gmail_context,
                 )
             )
         except Exception as e:
@@ -763,7 +895,13 @@ class PassthroughSynthesisPlugin(SynthesisPlugin):
         Returns:
             Raw markdown formatted context.
         """
-        from devscontext.models import DocsContext, JiraContext, MeetingContext
+        from devscontext.models import (
+            DocsContext,
+            GmailContext,
+            JiraContext,
+            MeetingContext,
+            SlackContext,
+        )
 
         parts = [f"## Task: {task_id}", ""]
 
@@ -786,6 +924,10 @@ class PassthroughSynthesisPlugin(SynthesisPlugin):
                 parts.append(self._format_meetings(ctx.data))
             elif isinstance(ctx.data, DocsContext):
                 parts.append(self._format_docs(ctx.data))
+            elif isinstance(ctx.data, SlackContext):
+                parts.append(self._format_slack(ctx.data))
+            elif isinstance(ctx.data, GmailContext):
+                parts.append(self._format_gmail(ctx.data))
             elif ctx.raw_text:
                 parts.append(ctx.raw_text)
             else:
@@ -860,6 +1002,52 @@ class PassthroughSynthesisPlugin(SynthesisPlugin):
             lines.append(f"**{title}** [{s.doc_type}]")
             lines.append(f"*Source: {s.file_path}*")
             lines.append(f"\n{s.content[:500]}...")
+            lines.append("")
+
+        return "\n".join(lines)
+
+    def _format_slack(self, ctx: SlackContext) -> str:
+        """Format Slack context as markdown."""
+        if not ctx.threads and not ctx.standalone_messages:
+            return "*No Slack discussions found*"
+
+        lines = []
+        for thread in ctx.threads:
+            date_str = thread.parent_message.timestamp.strftime("%Y-%m-%d")
+            lines.append(f"**#{thread.parent_message.channel_name}** ({date_str})")
+            lines.append(f"Participants: {', '.join(thread.participant_names)}")
+            user = thread.parent_message.user_name
+            text = thread.parent_message.text[:200]
+            lines.append(f"\n{user}: {text}...")
+            if thread.decisions:
+                lines.append("\nDecisions:")
+                for d in thread.decisions[:3]:
+                    lines.append(f"- {d}")
+            if thread.action_items:
+                lines.append("\nAction Items:")
+                for a in thread.action_items[:3]:
+                    lines.append(f"- {a}")
+            lines.append("")
+
+        for msg in ctx.standalone_messages[:5]:
+            date_str = msg.timestamp.strftime("%Y-%m-%d")
+            lines.append(f"**#{msg.channel_name}** ({date_str}): {msg.text[:200]}...")
+
+        return "\n".join(lines)
+
+    def _format_gmail(self, ctx: GmailContext) -> str:
+        """Format Gmail context as markdown."""
+        if not ctx.threads:
+            return "*No email threads found*"
+
+        lines = []
+        for thread in ctx.threads:
+            lines.append(f"**{thread.subject}**")
+            lines.append(f"Participants: {', '.join(thread.participants[:5])}")
+            lines.append(f"Latest: {thread.latest_date.strftime('%Y-%m-%d')}")
+            for msg in thread.messages[:2]:
+                sender = msg.sender_name or msg.sender
+                lines.append(f"\n{sender}: {msg.snippet[:200]}...")
             lines.append("")
 
         return "\n".join(lines)

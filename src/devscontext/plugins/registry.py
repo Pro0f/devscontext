@@ -83,6 +83,8 @@ class PluginRegistry:
         - JiraAdapter
         - FirefliesAdapter
         - LocalDocsAdapter
+        - SlackAdapter
+        - GmailAdapter
         - LLMSynthesisPlugin
 
         Call this before load_from_config() to ensure built-in plugins
@@ -90,8 +92,10 @@ class PluginRegistry:
         """
         # Import here to avoid circular imports
         from devscontext.adapters.fireflies import FirefliesAdapter
+        from devscontext.adapters.gmail import GmailAdapter
         from devscontext.adapters.jira import JiraAdapter
         from devscontext.adapters.local_docs import LocalDocsAdapter
+        from devscontext.adapters.slack import SlackAdapter
         from devscontext.synthesis import (
             LLMSynthesisPlugin,
             PassthroughSynthesisPlugin,
@@ -102,6 +106,8 @@ class PluginRegistry:
         self.register_adapter(JiraAdapter)
         self.register_adapter(FirefliesAdapter)
         self.register_adapter(LocalDocsAdapter)
+        self.register_adapter(SlackAdapter)
+        self.register_adapter(GmailAdapter)
 
         # Register synthesis plugins
         self.register_synthesis(LLMSynthesisPlugin)
@@ -157,6 +163,28 @@ class PluginRegistry:
                 logger.info("Loaded LocalDocs adapter")
             except Exception as e:
                 logger.warning(f"Failed to load LocalDocs adapter: {e}")
+
+        # Load Slack adapter if enabled
+        if sources.slack.enabled:
+            if sources.slack.bot_token:
+                try:
+                    self.create_adapter("slack", sources.slack)
+                    logger.info("Loaded Slack adapter")
+                except Exception as e:
+                    logger.warning(f"Failed to load Slack adapter: {e}")
+            else:
+                logger.debug("Slack adapter skipped: missing bot_token")
+
+        # Load Gmail adapter if enabled
+        if sources.gmail.enabled:
+            if sources.gmail.credentials_path:
+                try:
+                    self.create_adapter("gmail", sources.gmail)
+                    logger.info("Loaded Gmail adapter")
+                except Exception as e:
+                    logger.warning(f"Failed to load Gmail adapter: {e}")
+            else:
+                logger.debug("Gmail adapter skipped: missing credentials_path")
 
         # Load synthesis plugin
         synthesis_config = config.synthesis

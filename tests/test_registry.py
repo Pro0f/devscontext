@@ -39,7 +39,7 @@ class TestPluginRegistryBuiltins:
         registry.register_builtin_plugins()
         registry.register_builtin_plugins()  # Should not raise
 
-        assert len(registry.list_adapters()) == 3
+        assert len(registry.list_adapters()) == 5  # jira, fireflies, local_docs, slack, gmail
         # 3 synthesis plugins: llm, template, passthrough
         assert len(registry.list_synthesis_plugins()) == 3
 
