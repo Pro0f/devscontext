@@ -4,6 +4,9 @@ This adapter scans configured directories for markdown files, splits them
 into sections, and matches them against Jira tickets using components,
 labels, and keyword matching.
 
+Optionally supports RAG (embedding-based) search when configured:
+    pip install devscontext[rag]
+
 This adapter implements the Adapter interface for the plugin system.
 
 Example:
@@ -17,7 +20,7 @@ from __future__ import annotations
 import re
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import TYPE_CHECKING, ClassVar, Literal
+from typing import TYPE_CHECKING, Any, ClassVar, Literal
 
 from devscontext.constants import (
     ADAPTER_LOCAL_DOCS,
@@ -30,6 +33,8 @@ from devscontext.utils import extract_keywords, truncate_text
 
 if TYPE_CHECKING:
     from devscontext.models import JiraTicket
+    from devscontext.rag.embeddings import EmbeddingProvider
+    from devscontext.rag.index import DocumentIndex
 
 logger = get_logger(__name__)
 
@@ -88,6 +93,11 @@ class LocalDocsAdapter(Adapter):
         """
         self._config = config
         self._cache: dict[Path, ParsedDoc] = {}
+
+        # RAG components (lazy-loaded when first needed)
+        self._rag_index: DocumentIndex | None = None
+        self._embedding_provider: EmbeddingProvider | None = None
+        self._rag_initialized = False
 
     def _classify_doc_type(self, file_path: Path) -> DocType:
         """Classify a document based on its path.
@@ -267,6 +277,333 @@ class LocalDocsAdapter(Adapter):
 
         return md_files
 
+    def _init_rag(self) -> bool:
+        """Initialize RAG components if configured and available.
+
+        Returns:
+            True if RAG is ready to use, False otherwise.
+        """
+        if self._rag_initialized:
+            return self._rag_index is not None and self._embedding_provider is not None
+
+        self._rag_initialized = True
+
+        # Check if RAG is configured
+        if not self._config.rag or not self._config.rag.enabled:
+            return False
+
+        # Check if RAG dependencies are available
+        try:
+            from devscontext.rag import is_rag_available
+
+            if not is_rag_available():
+                logger.warning(
+                    "RAG enabled but dependencies not installed. "
+                    "Install with: pip install devscontext[rag]"
+                )
+                return False
+
+            from devscontext.rag import DocumentIndex, get_embedding_provider
+
+            # Initialize embedding provider
+            self._embedding_provider = get_embedding_provider(self._config.rag)
+
+            # Initialize and load document index
+            self._rag_index = DocumentIndex(self._config.rag.index_path)
+            if self._rag_index.exists():
+                self._rag_index.load()
+                logger.info(
+                    "RAG index loaded",
+                    extra={
+                        "sections": self._rag_index.section_count,
+                        "model": self._rag_index.model,
+                    },
+                )
+            else:
+                logger.warning(
+                    "RAG enabled but index not found. "
+                    "Run 'devscontext index-docs' to build the index."
+                )
+                return False
+
+            return True
+
+        except ImportError as e:
+            logger.warning(
+                "Failed to initialize RAG",
+                extra={"error": str(e)},
+            )
+            return False
+        except Exception as e:
+            logger.warning(
+                "Error initializing RAG, falling back to keyword matching",
+                extra={"error": str(e)},
+            )
+            return False
+
+    async def _find_docs_via_rag(self, ticket: JiraTicket) -> DocsContext:
+        """Find relevant docs using embedding-based semantic search.
+
+        Args:
+            ticket: The Jira ticket to find docs for.
+
+        Returns:
+            DocsContext with relevant sections.
+        """
+        if not self._rag_index or not self._embedding_provider or not self._config.rag:
+            return await self._find_docs_via_keywords(ticket)
+
+        # Build query from ticket
+        query = ticket.title
+        if ticket.description:
+            query += " " + ticket.description[:500]
+
+        try:
+            # Get query embedding
+            query_embedding = await self._embedding_provider.embed_query(query)
+
+            # Search index
+            results = self._rag_index.search(
+                query_embedding,
+                top_k=self._config.rag.top_k,
+                threshold=self._config.rag.similarity_threshold,
+            )
+
+            # Convert to DocSection, collecting matched sections
+            matched_sections: list[DocSection] = []
+            seen_keys: set[tuple[str, str | None]] = set()
+
+            for indexed_section, _score in results:
+                key = (indexed_section.file_path, indexed_section.section_title)
+                if key not in seen_keys:
+                    seen_keys.add(key)
+                    content = truncate_text(indexed_section.content, MAX_SECTION_CHARS)
+                    matched_sections.append(
+                        DocSection(
+                            file_path=indexed_section.file_path,
+                            section_title=indexed_section.section_title,
+                            content=content,
+                            doc_type=indexed_section.doc_type,  # type: ignore[arg-type]
+                        )
+                    )
+
+            # Always include standards (scan and add any not already matched)
+            md_files = self._scan_directories()
+            for file_path in md_files:
+                parsed = self._parse_file(file_path)
+                if parsed and parsed.doc_type == "standards":
+                    for section in parsed.sections:
+                        key = (str(section.file_path), section.section_title)
+                        if key not in seen_keys:
+                            seen_keys.add(key)
+                            matched_sections.append(self._to_doc_section(section))
+
+            # Cap at MAX_SECTIONS
+            result_sections = matched_sections[:MAX_SECTIONS]
+
+            logger.info(
+                "Found relevant docs via RAG",
+                extra={
+                    "ticket_id": ticket.ticket_id,
+                    "sections_found": len(result_sections),
+                    "rag_matches": len(results),
+                },
+            )
+
+            return DocsContext(sections=result_sections)
+
+        except Exception as e:
+            logger.warning(
+                "RAG search failed, falling back to keyword matching",
+                extra={"error": str(e)},
+            )
+            return await self._find_docs_via_keywords(ticket)
+
+    async def _find_docs_via_keywords(self, ticket: JiraTicket) -> DocsContext:
+        """Find relevant docs using keyword matching (original implementation).
+
+        Args:
+            ticket: The Jira ticket to find docs for.
+
+        Returns:
+            DocsContext with relevant sections.
+        """
+        md_files = self._scan_directories()
+        all_sections: list[ParsedSection] = []
+
+        # Parse all files
+        for file_path in md_files:
+            parsed = self._parse_file(file_path)
+            if parsed:
+                all_sections.extend(parsed.sections)
+
+        matched_sections: list[ParsedSection] = []
+        seen_keys: set[tuple[str, str | None]] = set()
+
+        def add_section(section: ParsedSection) -> None:
+            """Add section if not already seen."""
+            key = (str(section.file_path), section.section_title)
+            if key not in seen_keys:
+                seen_keys.add(key)
+                matched_sections.append(section)
+
+        # 1. Match by components
+        for component in ticket.components:
+            for section in all_sections:
+                if self._matches_term(section, component):
+                    add_section(section)
+
+        # 2. Match by labels
+        for label in ticket.labels:
+            for section in all_sections:
+                if self._matches_term(section, label):
+                    add_section(section)
+
+        # 3. Match by keywords from title
+        text_for_keywords = ticket.title
+        if ticket.description:
+            text_for_keywords += " " + ticket.description[:500]
+
+        keywords = extract_keywords(text_for_keywords)
+        for keyword in keywords:
+            for section in all_sections:
+                if self._matches_term(section, keyword):
+                    add_section(section)
+
+        # 4. Always include general coding standards
+        for section in all_sections:
+            if section.doc_type == "standards":
+                add_section(section)
+
+        # Cap at MAX_SECTIONS
+        result_sections = [self._to_doc_section(s) for s in matched_sections[:MAX_SECTIONS]]
+
+        logger.info(
+            "Found relevant docs via keywords",
+            extra={
+                "ticket_id": ticket.ticket_id,
+                "sections_found": len(result_sections),
+                "total_scanned": len(all_sections),
+            },
+        )
+
+        return DocsContext(sections=result_sections)
+
+    async def index_documents(self, rebuild: bool = False) -> dict[str, Any]:
+        """Build or rebuild the RAG index for local documentation.
+
+        This method scans all configured doc paths, generates embeddings for
+        each section, and saves them to the index file.
+
+        Args:
+            rebuild: If True, clear existing index before building.
+
+        Returns:
+            Dictionary with indexing statistics.
+
+        Raises:
+            ImportError: If RAG dependencies are not installed.
+            ValueError: If RAG is not configured.
+        """
+        if not self._config.rag:
+            raise ValueError(
+                "RAG not configured. Add 'rag' section to docs config in .devscontext.yaml"
+            )
+
+        from devscontext.rag import is_rag_available
+
+        if not is_rag_available():
+            raise ImportError(
+                "RAG dependencies not installed. Install with: pip install devscontext[rag]"
+            )
+
+        from devscontext.rag import DocumentIndex, get_embedding_provider
+        from devscontext.rag.index import IndexedSection
+
+        # Initialize components
+        provider = get_embedding_provider(self._config.rag)
+        index = DocumentIndex(self._config.rag.index_path)
+
+        # Handle rebuild
+        if rebuild and index.exists():
+            index.delete()
+            logger.info("Cleared existing index for rebuild")
+
+        # Scan and parse all documents
+        md_files = self._scan_directories()
+        all_sections: list[ParsedSection] = []
+
+        for file_path in md_files:
+            parsed = self._parse_file(file_path)
+            if parsed:
+                all_sections.extend(parsed.sections)
+
+        if not all_sections:
+            return {
+                "status": "no_docs",
+                "sections_indexed": 0,
+                "files_scanned": len(md_files),
+            }
+
+        # Prepare text for embedding
+        texts = []
+        indexed_sections = []
+
+        for section in all_sections:
+            # Create text combining title and content for better embedding
+            text_parts = []
+            if section.section_title:
+                text_parts.append(section.section_title)
+            if section.content:
+                text_parts.append(section.content)
+            text = "\n".join(text_parts)
+
+            texts.append(text)
+            indexed_sections.append(
+                IndexedSection(
+                    file_path=str(section.file_path),
+                    section_title=section.section_title,
+                    content=section.content,
+                    doc_type=section.doc_type,
+                )
+            )
+
+        # Generate embeddings in batches
+        logger.info(
+            "Generating embeddings",
+            extra={"sections": len(texts), "model": self._config.rag.embedding_model},
+        )
+
+        batch_size = 32
+        all_embeddings: list[list[float]] = []
+
+        for i in range(0, len(texts), batch_size):
+            batch = texts[i : i + batch_size]
+            embeddings = await provider.embed(batch)
+            all_embeddings.extend(embeddings)
+
+        # Add to index and save
+        index.add_sections(indexed_sections, all_embeddings, self._config.rag.embedding_model)
+        index.save()
+
+        stats = index.get_stats()
+        logger.info(
+            "Indexing complete",
+            extra={
+                "sections_indexed": len(indexed_sections),
+                "dimension": stats.get("dimension"),
+            },
+        )
+
+        return {
+            "status": "success",
+            "sections_indexed": len(indexed_sections),
+            "files_scanned": len(md_files),
+            "model": self._config.rag.embedding_model,
+            "dimension": stats.get("dimension"),
+            "index_path": str(self._config.rag.index_path),
+        }
+
     def _matches_term(self, section: ParsedSection, term: str) -> bool:
         """Check if a section matches a search term.
 
@@ -316,7 +653,8 @@ class LocalDocsAdapter(Adapter):
     async def find_relevant_docs(self, ticket: JiraTicket) -> DocsContext:
         """Find documentation relevant to a Jira ticket.
 
-        Matching strategy:
+        When RAG is enabled and the index exists, uses semantic search.
+        Otherwise, falls back to keyword matching:
         1. Match by ticket components → filenames and headings
         2. Match by ticket labels → filenames and headings
         3. Match by keywords from title → doc titles and content
@@ -331,68 +669,12 @@ class LocalDocsAdapter(Adapter):
         if not self._config.enabled:
             return DocsContext(sections=[])
 
-        md_files = self._scan_directories()
-        all_sections: list[ParsedSection] = []
+        # Try RAG if configured and available
+        if self._init_rag():
+            return await self._find_docs_via_rag(ticket)
 
-        # Parse all files
-        for file_path in md_files:
-            parsed = self._parse_file(file_path)
-            if parsed:
-                all_sections.extend(parsed.sections)
-
-        matched_sections: list[ParsedSection] = []
-        seen_keys: set[tuple[str, str | None]] = set()
-
-        def add_section(section: ParsedSection) -> None:
-            """Add section if not already seen."""
-            key = (str(section.file_path), section.section_title)
-            if key not in seen_keys:
-                seen_keys.add(key)
-                matched_sections.append(section)
-
-        # 1. Match by components
-        for component in ticket.components:
-            for section in all_sections:
-                if self._matches_term(section, component):
-                    add_section(section)
-
-        # 2. Match by labels
-        for label in ticket.labels:
-            for section in all_sections:
-                if self._matches_term(section, label):
-                    add_section(section)
-
-        # 3. Match by keywords from title
-        # Combine title and first part of description for keyword extraction
-        text_for_keywords = ticket.title
-        if ticket.description:
-            # Take first 500 chars of description
-            text_for_keywords += " " + ticket.description[:500]
-
-        keywords = extract_keywords(text_for_keywords)
-        for keyword in keywords:
-            for section in all_sections:
-                if self._matches_term(section, keyword):
-                    add_section(section)
-
-        # 4. Always include general coding standards
-        for section in all_sections:
-            if section.doc_type == "standards":
-                add_section(section)
-
-        # Cap at MAX_SECTIONS
-        result_sections = [self._to_doc_section(s) for s in matched_sections[:MAX_SECTIONS]]
-
-        logger.info(
-            "Found relevant docs",
-            extra={
-                "ticket_id": ticket.ticket_id,
-                "sections_found": len(result_sections),
-                "total_scanned": len(all_sections),
-            },
-        )
-
-        return DocsContext(sections=result_sections)
+        # Fall back to keyword matching
+        return await self._find_docs_via_keywords(ticket)
 
     async def get_standards(self, area: str | None = None) -> DocsContext:
         """Get coding standards documentation.

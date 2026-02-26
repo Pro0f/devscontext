@@ -176,6 +176,143 @@
       color: var(--green);
     }
 
+    /* Sources */
+    .sources {
+      padding: 60px 0;
+      background: var(--bg-secondary);
+    }
+
+    .sources h2 {
+      text-align: center;
+      font-size: 1.5rem;
+      margin-bottom: 12px;
+    }
+
+    .sources .subtitle {
+      text-align: center;
+      color: var(--text-muted);
+      margin-bottom: 40px;
+    }
+
+    .sources-grid {
+      display: grid;
+      grid-template-columns: repeat(4, 1fr);
+      gap: 16px;
+    }
+
+    @media (max-width: 800px) {
+      .sources-grid {
+        grid-template-columns: repeat(2, 1fr);
+      }
+    }
+
+    @media (max-width: 500px) {
+      .sources-grid {
+        grid-template-columns: 1fr;
+      }
+    }
+
+    .source-card {
+      background: var(--bg);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 20px;
+      text-align: center;
+      position: relative;
+    }
+
+    .source-card.coming-soon {
+      opacity: 0.5;
+    }
+
+    .source-icon {
+      font-size: 2rem;
+      margin-bottom: 8px;
+    }
+
+    .source-card h3 {
+      font-size: 1rem;
+      margin-bottom: 4px;
+    }
+
+    .source-card p {
+      font-size: 0.8rem;
+      color: var(--text-muted);
+    }
+
+    .badge {
+      position: absolute;
+      top: 8px;
+      right: 8px;
+      padding: 2px 6px;
+      border-radius: 4px;
+      font-size: 0.65rem;
+      text-transform: uppercase;
+      font-weight: 600;
+    }
+
+    .badge.new {
+      background: var(--green);
+      color: var(--bg);
+    }
+
+    .badge.soon {
+      background: var(--border);
+      color: var(--text-muted);
+    }
+
+    /* Features */
+    .features {
+      padding: 60px 0;
+    }
+
+    .features h2 {
+      text-align: center;
+      font-size: 1.5rem;
+      margin-bottom: 12px;
+    }
+
+    .features .subtitle {
+      text-align: center;
+      color: var(--text-muted);
+      margin-bottom: 40px;
+    }
+
+    .features-grid {
+      display: grid;
+      grid-template-columns: repeat(2, 1fr);
+      gap: 24px;
+    }
+
+    @media (max-width: 700px) {
+      .features-grid {
+        grid-template-columns: 1fr;
+      }
+    }
+
+    .feature-card {
+      background: var(--bg-secondary);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 24px;
+    }
+
+    .feature-card h3 {
+      font-size: 1.1rem;
+      margin-bottom: 8px;
+    }
+
+    .feature-card p {
+      color: var(--text-muted);
+      font-size: 0.9rem;
+      margin-bottom: 16px;
+    }
+
+    .feature-card pre {
+      font-size: 0.8rem;
+      padding: 12px;
+    }
+
     /* CTA */
     .cta {
       padding: 60px 0;
@@ -263,6 +400,60 @@
       </div>
     </section>
 
+    <section class="sources">
+      <div class="container">
+        <h2>Connect Your Tools</h2>
+        <p class="subtitle">DevsContext pulls context from where your team works</p>
+        <div class="sources-grid">
+          <div class="source-card">
+            <div class="source-icon">📋</div>
+            <h3>Jira</h3>
+            <p>Tickets, comments, linked issues</p>
+          </div>
+          <div class="source-card">
+            <div class="source-icon">🎙️</div>
+            <h3>Fireflies</h3>
+            <p>Meeting transcripts, decisions</p>
+          </div>
+          <div class="source-card">
+            <span class="badge new">New</span>
+            <div class="source-icon">💬</div>
+            <h3>Slack</h3>
+            <p>Team discussions, threads</p>
+          </div>
+          <div class="source-card">
+            <span class="badge new">New</span>
+            <div class="source-icon">📧</div>
+            <h3>Gmail</h3>
+            <p>Email threads, decisions</p>
+          </div>
+          <div class="source-card">
+            <div class="source-icon">📁</div>
+            <h3>Local Docs</h3>
+            <p>Architecture, standards, ADRs</p>
+          </div>
+          <div class="source-card coming-soon">
+            <span class="badge soon">Soon</span>
+            <div class="source-icon">📝</div>
+            <h3>Notion</h3>
+            <p>Documentation, wikis</p>
+          </div>
+          <div class="source-card coming-soon">
+            <span class="badge soon">Soon</span>
+            <div class="source-icon">📊</div>
+            <h3>Linear</h3>
+            <p>Issue tracking</p>
+          </div>
+          <div class="source-card coming-soon">
+            <span class="badge soon">Soon</span>
+            <div class="source-icon">📖</div>
+            <h3>Confluence</h3>
+            <p>Team documentation</p>
+          </div>
+        </div>
+      </div>
+    </section>
+
     <section class="example">
       <div class="container">
         <h2>What Claude Code sees</h2>
@@ -294,7 +485,34 @@ src/workers/webhook_worker.ts:45-80 <span class="code-source">[Architecture: pay
 <span class="code-heading">### Coding Standards</span>
 - Use Result&lt;T, WebhookError&gt; pattern, don't throw exceptions
 - Retry delays: use calculateBackoff() helper from src/utils/retry.ts
-- Tests: mock SQS with @aws-sdk/client-sqs-mock <span class="code-source">[Standards: typescript.md]</span></code></pre>
+- Tests: mock SQS with @aws-sdk/client-sqs-mock <span class="code-source">[Standards: typescript.md]</span>
+
+<span class="code-heading">### Team Discussions</span>
+<strong>#payments-team</strong> (2024-03-18)
+@sarah: "For the webhook retries, let's use SQS visibility timeout
+rather than a separate retry table. Simpler and handles timing natively."
+@mike: "Agreed. I'll update the design doc." <span class="code-source">[Slack: #payments-team thread]</span></code></pre>
+      </div>
+    </section>
+
+    <section class="features">
+      <div class="container">
+        <h2>Built for Teams</h2>
+        <p class="subtitle">Features that make AI coding assistants actually useful</p>
+        <div class="features-grid">
+          <div class="feature-card">
+            <h3>Pre-processing Agent</h3>
+            <p>Build rich context proactively. When tickets move to "Ready for Dev", context is already waiting.</p>
+            <pre><code><span class="command">devscontext agent start</span>
+<span class="code-comment"># Polls Jira, pre-builds context</span></code></pre>
+          </div>
+          <div class="feature-card">
+            <h3>Plugin System</h3>
+            <p>Add custom sources or synthesis strategies. Publish as pip packages with entry points.</p>
+            <pre><code><span class="code-comment"># pip install devscontext-linear</span>
+<span class="code-comment"># Auto-discovered at startup</span></code></pre>
+          </div>
+        </div>
       </div>
     </section>
 

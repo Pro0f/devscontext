@@ -80,42 +80,81 @@ Then in Claude Code:
 
 ## Supported Sources
 
-| Source | What's Fetched |
-|--------|----------------|
-| **Jira** | Ticket details, comments, linked issues, acceptance criteria |
-| **Fireflies** | Meeting transcripts, decisions, action items |
-| **Local Docs** | Architecture docs, coding standards, ADRs |
+| Source | What's Fetched | Status |
+|--------|----------------|--------|
+| **Jira** | Ticket details, comments, linked issues, acceptance criteria | Stable |
+| **Fireflies** | Meeting transcripts, decisions, action items | Stable |
+| **Local Docs** | Architecture docs, coding standards, ADRs | Stable |
+| **Slack** | Channel discussions, threads, decisions | New |
+| **Gmail** | Email threads related to tickets | New |
 
-Coming soon: Linear, Notion, Confluence, Slack threads
+Coming soon: Linear, Notion, Confluence
+
+## Pre-processing Agent
+
+Build context proactively before developers pick up tickets:
+
+```bash
+# Start the agent (polls Jira for ready tickets)
+devscontext agent start
+
+# Single run for CI/cron
+devscontext agent run-once
+
+# Check pre-built context status
+devscontext agent status
+```
+
+Configure in `.devscontext.yaml`:
+
+```yaml
+agents:
+  preprocessor:
+    enabled: true
+    jira_status: "Ready for Development"
+    jira_project: "PROJ"
+```
+
+See [docs/pre-processing.md](docs/pre-processing.md) for the full guide.
+
+## Plugin System
+
+DevsContext uses a plugin architecture for adapters and synthesis:
+
+- **Adapters**: Fetch context from sources (Jira, Slack, docs, etc.)
+- **Synthesis Plugins**: Combine context (LLM, template, passthrough)
+
+See [docs/plugins.md](docs/plugins.md) for creating custom plugins.
 
 ## Configuration
 
 DevsContext uses `.devscontext.yaml` in your project root:
 
 ```yaml
-adapters:
+sources:
   jira:
     enabled: true
     base_url: "https://your-company.atlassian.net"
     email: "${JIRA_EMAIL}"
     api_token: "${JIRA_API_TOKEN}"
 
-  fireflies:
-    enabled: false  # Optional
-    api_key: "${FIREFLIES_API_KEY}"
-
-  local_docs:
+  docs:
     enabled: true
     paths:
       - "./docs"
       - "./CLAUDE.md"
 
+  slack:
+    enabled: true
+    bot_token: "${SLACK_BOT_TOKEN}"
+    channels: ["engineering", "payments-team"]
+
 synthesis:
   provider: "anthropic"
-  model: "claude-3-haiku-20240307"
+  model: "claude-haiku-4-5"
 ```
 
-See [.devscontext.yaml.example](.devscontext.yaml.example) for all options.
+Full configuration reference: [docs/configuration.md](docs/configuration.md)
 
 ## How It Works
 

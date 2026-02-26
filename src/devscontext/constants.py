@@ -102,8 +102,6 @@ SLACK_THREAD_REPLY_LIMIT: Final[int] = 50
 # =============================================================================
 # GMAIL API
 # =============================================================================
-GMAIL_API_SCOPES: Final[tuple[str, ...]] = (
-    "https://www.googleapis.com/auth/gmail.readonly",
-)
+GMAIL_API_SCOPES: Final[tuple[str, ...]] = ("https://www.googleapis.com/auth/gmail.readonly",)
 GMAIL_BODY_MAX_CHARS: Final[int] = 5000
 GMAIL_MAX_RESULTS_PER_QUERY: Final[int] = 25

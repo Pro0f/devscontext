@@ -273,59 +273,45 @@ class TestSlackAdapter:
 class TestDecisionExtraction:
     """Tests for decision/action extraction logic."""
 
-    def test_extract_decisions_finds_decided(
-        self, slack_adapter: SlackAdapter
-    ) -> None:
+    def test_extract_decisions_finds_decided(self, slack_adapter: SlackAdapter) -> None:
         """Test that 'decided' pattern is extracted."""
         text = "We decided to use PostgreSQL for this feature."
         decisions = slack_adapter._extract_decisions(text)
         assert len(decisions) >= 1
         assert "PostgreSQL" in decisions[0]
 
-    def test_extract_decisions_finds_lets_go_with(
-        self, slack_adapter: SlackAdapter
-    ) -> None:
+    def test_extract_decisions_finds_lets_go_with(self, slack_adapter: SlackAdapter) -> None:
         """Test that 'let's go with' pattern is extracted."""
         text = "Let's go with the async implementation approach."
         decisions = slack_adapter._extract_decisions(text)
         assert len(decisions) >= 1
 
-    def test_extract_decisions_finds_agreed(
-        self, slack_adapter: SlackAdapter
-    ) -> None:
+    def test_extract_decisions_finds_agreed(self, slack_adapter: SlackAdapter) -> None:
         """Test that 'agreed' pattern is extracted."""
         text = "Agreed: we'll use the new API endpoint."
         decisions = slack_adapter._extract_decisions(text)
         assert len(decisions) >= 1
 
-    def test_extract_action_items_finds_ill(
-        self, slack_adapter: SlackAdapter
-    ) -> None:
+    def test_extract_action_items_finds_ill(self, slack_adapter: SlackAdapter) -> None:
         """Test that \"I'll\" pattern is extracted."""
         text = "I'll implement the webhook handler tomorrow."
         actions = slack_adapter._extract_action_items(text)
         assert len(actions) >= 1
         assert "webhook" in actions[0]
 
-    def test_extract_action_items_finds_can_you(
-        self, slack_adapter: SlackAdapter
-    ) -> None:
+    def test_extract_action_items_finds_can_you(self, slack_adapter: SlackAdapter) -> None:
         """Test that '@user can you' pattern is extracted."""
         text = "@alice can you review the PR when you get a chance?"
         actions = slack_adapter._extract_action_items(text)
         assert len(actions) >= 1
 
-    def test_extract_decisions_empty_on_no_match(
-        self, slack_adapter: SlackAdapter
-    ) -> None:
+    def test_extract_decisions_empty_on_no_match(self, slack_adapter: SlackAdapter) -> None:
         """Test that no decisions extracted from plain text."""
         text = "Just a regular message about the project."
         decisions = slack_adapter._extract_decisions(text)
         assert len(decisions) == 0
 
-    def test_extract_action_items_empty_on_no_match(
-        self, slack_adapter: SlackAdapter
-    ) -> None:
+    def test_extract_action_items_empty_on_no_match(self, slack_adapter: SlackAdapter) -> None:
         """Test that no actions extracted from plain text."""
         text = "Just discussing some ideas here."
         actions = slack_adapter._extract_action_items(text)
@@ -357,9 +343,7 @@ class TestChannelHistoryCache:
 class TestRateLimiter:
     """Tests for rate limiter."""
 
-    async def test_rate_limiter_allows_first_request(
-        self, slack_adapter: SlackAdapter
-    ) -> None:
+    async def test_rate_limiter_allows_first_request(self, slack_adapter: SlackAdapter) -> None:
         """Test rate limiter allows first request immediately."""
         # Should not raise or block significantly
         await slack_adapter._rate_limiter.acquire()

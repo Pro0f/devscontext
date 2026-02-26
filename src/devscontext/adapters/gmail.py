@@ -178,14 +178,16 @@ class GmailAdapter(Adapter):
             loop = asyncio.get_event_loop()
             result = await loop.run_in_executor(
                 None,
-                lambda: service.users()
-                .messages()
-                .list(
-                    userId="me",
-                    q=full_query,
-                    maxResults=max_results,
-                )
-                .execute(),
+                lambda: (
+                    service.users()
+                    .messages()
+                    .list(
+                        userId="me",
+                        q=full_query,
+                        maxResults=max_results,
+                    )
+                    .execute()
+                ),
             )
 
             return result.get("messages", [])
@@ -212,14 +214,16 @@ class GmailAdapter(Adapter):
             loop = asyncio.get_event_loop()
             msg = await loop.run_in_executor(
                 None,
-                lambda: service.users()
-                .messages()
-                .get(
-                    userId="me",
-                    id=message_id,
-                    format="full",
-                )
-                .execute(),
+                lambda: (
+                    service.users()
+                    .messages()
+                    .get(
+                        userId="me",
+                        id=message_id,
+                        format="full",
+                    )
+                    .execute()
+                ),
             )
 
             return msg
@@ -243,14 +247,16 @@ class GmailAdapter(Adapter):
             loop = asyncio.get_event_loop()
             thread = await loop.run_in_executor(
                 None,
-                lambda: service.users()
-                .threads()
-                .get(
-                    userId="me",
-                    id=thread_id,
-                    format="full",
-                )
-                .execute(),
+                lambda: (
+                    service.users()
+                    .threads()
+                    .get(
+                        userId="me",
+                        id=thread_id,
+                        format="full",
+                    )
+                    .execute()
+                ),
             )
 
             return thread
@@ -268,9 +274,7 @@ class GmailAdapter(Adapter):
         Returns:
             GmailMessage instance.
         """
-        headers = {
-            h["name"].lower(): h["value"] for h in msg.get("payload", {}).get("headers", [])
-        }
+        headers = {h["name"].lower(): h["value"] for h in msg.get("payload", {}).get("headers", [])}
 
         # Parse sender
         sender_raw = headers.get("from", "")

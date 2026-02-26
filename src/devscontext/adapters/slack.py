@@ -358,9 +358,7 @@ class SlackAdapter(Adapter):
 
         # Filter to configured channels
         target_channels = [
-            (name, channel_ids[name])
-            for name in self._config.channels
-            if name in channel_ids
+            (name, channel_ids[name]) for name in self._config.channels if name in channel_ids
         ]
 
         if not target_channels:

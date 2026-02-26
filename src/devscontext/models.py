@@ -48,6 +48,42 @@ class FirefliesConfig(BaseModel):
     primary: bool = Field(default=False, description="Whether this is a primary source")
 
 
+class RagConfig(BaseModel):
+    """RAG configuration for embedding-based doc search.
+
+    When enabled, the LocalDocsAdapter uses semantic similarity (embeddings)
+    instead of keyword matching for finding relevant documentation sections.
+
+    Requires: pip install devscontext[rag]
+    """
+
+    enabled: bool = Field(default=False, description="Enable RAG for doc matching")
+    embedding_provider: Literal["local", "openai", "ollama"] = Field(
+        default="local",
+        description="Embedding provider (local=sentence-transformers, openai, ollama)",
+    )
+    embedding_model: str = Field(
+        default="all-MiniLM-L6-v2",
+        description="Model for generating embeddings",
+    )
+    index_path: str = Field(
+        default=".devscontext/doc_index.json",
+        description="Path to the embedding index file",
+    )
+    top_k: int = Field(
+        default=10,
+        ge=1,
+        le=50,
+        description="Number of similar sections to retrieve",
+    )
+    similarity_threshold: float = Field(
+        default=0.3,
+        ge=0.0,
+        le=1.0,
+        description="Minimum similarity score (0-1) for results",
+    )
+
+
 class DocsConfig(BaseModel):
     """Local documentation adapter configuration."""
 
@@ -59,6 +95,7 @@ class DocsConfig(BaseModel):
     architecture_path: str | None = Field(default=None, description="Path to architecture docs")
     enabled: bool = Field(default=True, description="Whether adapter is enabled")
     primary: bool = Field(default=False, description="Whether this is a primary source")
+    rag: RagConfig | None = Field(default=None, description="Optional RAG configuration")
 
 
 class SlackConfig(BaseModel):

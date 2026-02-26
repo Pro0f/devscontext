@@ -291,6 +291,150 @@ def serve(ctx: click.Context) -> None:
 
 
 # =============================================================================
+# RAG INDEXING COMMAND
+# =============================================================================
+
+
+@cli.command("index-docs")
+@click.option("--rebuild", is_flag=True, help="Clear and rebuild the entire index")
+@click.option("--status", "show_status", is_flag=True, help="Show index statistics only")
+@click.pass_context
+def index_docs(ctx: click.Context, rebuild: bool, show_status: bool) -> None:
+    """Build embedding index for local documentation.
+
+    Creates vector embeddings for all markdown documents in the configured
+    doc paths, enabling semantic search for better doc matching.
+
+    This command requires RAG to be configured in .devscontext.yaml:
+
+        \b
+        sources:
+          docs:
+            rag:
+              enabled: true
+              embedding_provider: local
+              embedding_model: all-MiniLM-L6-v2
+
+    Requires: pip install devscontext[rag]
+    """
+    import asyncio
+
+    from devscontext.adapters.local_docs import LocalDocsAdapter
+    from devscontext.config import load_devscontext_config
+
+    verbose = ctx.obj.get("verbose", False)
+
+    try:
+        config = load_devscontext_config()
+    except FileNotFoundError:
+        click.echo(_error("No .devscontext.yaml found. Run 'devscontext init' first."))
+        sys.exit(1)
+
+    if not config.sources.docs.rag:
+        click.echo(_error("RAG not configured in .devscontext.yaml"))
+        click.echo()
+        click.echo("Add the following to your config:")
+        click.echo()
+        click.echo("  sources:")
+        click.echo("    docs:")
+        click.echo("      rag:")
+        click.echo("        enabled: true")
+        click.echo("        embedding_provider: local")
+        sys.exit(1)
+
+    # Check if RAG dependencies are available
+    try:
+        from devscontext.rag import is_rag_available
+
+        if not is_rag_available():
+            click.echo(_error("RAG dependencies not installed"))
+            click.echo()
+            click.echo("Install with: pip install devscontext[rag]")
+            sys.exit(1)
+    except ImportError:
+        click.echo(_error("RAG module not available"))
+        sys.exit(1)
+
+    # Status only mode
+    if show_status:
+        from devscontext.rag import DocumentIndex
+
+        index = DocumentIndex(config.sources.docs.rag.index_path)
+
+        click.echo()
+        click.echo(click.style("RAG Index Status", bold=True))
+        click.echo()
+
+        if not index.exists():
+            click.echo(_error("Index does not exist"))
+            click.echo(_info("Run 'devscontext index-docs' to build it"))
+            return
+
+        index.load()
+        stats = index.get_stats()
+
+        click.echo(f"  Index path:    {stats['index_path']}")
+        click.echo(f"  Model:         {stats['model']}")
+        click.echo(f"  Dimension:     {stats['dimension']}")
+        click.echo(f"  Sections:      {stats['section_count']}")
+        if stats["indexed_at"]:
+            click.echo(f"  Indexed at:    {stats['indexed_at']}")
+
+        if stats.get("doc_types"):
+            click.echo()
+            click.echo("  Document types:")
+            for doc_type, count in stats["doc_types"].items():
+                click.echo(f"    {doc_type}: {count}")
+
+        return
+
+    # Build/rebuild index
+    click.echo()
+    click.echo(click.style("Building RAG Index", bold=True))
+    click.echo()
+
+    if rebuild:
+        click.echo(_info("Rebuild mode - clearing existing index"))
+
+    click.echo(_info(f"Model: {config.sources.docs.rag.embedding_model}"))
+    click.echo(_info(f"Doc paths: {', '.join(config.sources.docs.paths)}"))
+    click.echo()
+
+    adapter = LocalDocsAdapter(config.sources.docs)
+
+    async def build_index() -> dict[str, Any]:
+        return await adapter.index_documents(rebuild=rebuild)
+
+    try:
+        start_time = time.monotonic()
+        result = asyncio.run(build_index())
+        duration = time.monotonic() - start_time
+
+        if result["status"] == "no_docs":
+            click.echo(_error("No documents found in configured paths"))
+            sys.exit(1)
+
+        click.echo(_success(f"Indexed {result['sections_indexed']} sections in {duration:.1f}s"))
+        click.echo()
+        click.echo(f"  Files scanned: {result['files_scanned']}")
+        click.echo(f"  Dimension:     {result['dimension']}")
+        click.echo(f"  Index path:    {result['index_path']}")
+
+    except ImportError as e:
+        click.echo(_error(f"Missing dependency: {e}"))
+        click.echo()
+        click.echo("Install with: pip install devscontext[rag]")
+        sys.exit(1)
+    except Exception as e:
+        if verbose:
+            import traceback
+
+            click.echo(traceback.format_exc(), err=True)
+        click.echo(_error(f"Indexing failed: {e}"), err=True)
+        sys.exit(1)
+
+
+# =============================================================================
 # AGENT COMMANDS
 # =============================================================================
 
