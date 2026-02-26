@@ -102,7 +102,7 @@ class LocalEmbeddingProvider(EmbeddingProvider):
             model: Model name from HuggingFace (default: all-MiniLM-L6-v2).
         """
         super().__init__(model)
-        self._model_instance = None
+        self._model_instance: Any = None
 
     def _load_model(self) -> Any:  # Returns SentenceTransformer
         """Lazy-load the sentence-transformers model."""
@@ -237,7 +237,7 @@ class OllamaEmbeddingProvider(EmbeddingProvider):
         """
         super().__init__(model)
         self.base_url = os.environ.get("OLLAMA_BASE_URL", base_url)
-        self._client = None
+        self._client: Any = None
 
     def _get_client(self) -> Any:  # Returns httpx.AsyncClient
         """Lazy-load the HTTP client."""

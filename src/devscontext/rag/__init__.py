@@ -46,7 +46,7 @@ def is_rag_available() -> bool:
     return _RAG_AVAILABLE
 
 
-def get_embedding_provider(config: RagConfig) -> EmbeddingProvider:  # noqa: F821
+def get_embedding_provider(config: "RagConfig") -> "EmbeddingProvider":  # type: ignore[name-defined]
     """Factory function to create an embedding provider based on config.
 
     Args:

@@ -89,7 +89,7 @@ class DocumentIndex:
         self._indexed_at: datetime | None = None
         self._sections: list[IndexedSection] = []
         self._embeddings: list[list[float]] = []
-        self._embeddings_array = None  # Cached numpy array
+        self._embeddings_array: Any = None  # Cached numpy array
 
     @property
     def is_loaded(self) -> bool:
@@ -294,7 +294,7 @@ class DocumentIndex:
         Returns:
             Dictionary with index statistics.
         """
-        doc_types = {}
+        doc_types: dict[str, int] = {}
         for section in self._sections:
             doc_types[section.doc_type] = doc_types.get(section.doc_type, 0) + 1
 

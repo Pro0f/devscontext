@@ -135,6 +135,7 @@ module = [
     "googleapiclient.*",
     "sentence_transformers",
     "numpy",
+    "openai",
 ]
 ignore_missing_imports = true
 

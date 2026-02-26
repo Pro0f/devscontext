@@ -190,7 +190,8 @@ class GmailAdapter(Adapter):
                 ),
             )
 
-            return result.get("messages", [])
+            messages: list[dict[str, Any]] = result.get("messages", [])
+            return messages
 
         except ImportError:
             logger.warning("Gmail dependencies not installed")
@@ -212,7 +213,7 @@ class GmailAdapter(Adapter):
             service = self._get_service()
 
             loop = asyncio.get_event_loop()
-            msg = await loop.run_in_executor(
+            msg: dict[str, Any] = await loop.run_in_executor(
                 None,
                 lambda: (
                     service.users()
@@ -245,7 +246,7 @@ class GmailAdapter(Adapter):
             service = self._get_service()
 
             loop = asyncio.get_event_loop()
-            thread = await loop.run_in_executor(
+            thread: dict[str, Any] = await loop.run_in_executor(
                 None,
                 lambda: (
                     service.users()
@@ -411,7 +412,10 @@ class GmailAdapter(Adapter):
             )
 
         # Group by thread and fetch full threads
-        thread_ids = list({m.get("threadId") for m in message_refs if m.get("threadId")})
+        thread_ids: list[str] = [
+            tid for m in message_refs if (tid := m.get("threadId")) is not None
+        ]
+        thread_ids = list(dict.fromkeys(thread_ids))  # Deduplicate while preserving order
         threads: list[GmailThread] = []
 
         for thread_id in thread_ids[:10]:  # Limit threads to avoid too many API calls

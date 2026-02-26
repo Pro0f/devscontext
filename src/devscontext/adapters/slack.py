@@ -216,7 +216,7 @@ class SlackAdapter(Adapter):
                 response = await client.post(endpoint, json=params)
 
             response.raise_for_status()
-            data = response.json()
+            data: dict[str, Any] = response.json()
 
             if not data.get("ok"):
                 error = data.get("error", "unknown_error")
@@ -331,7 +331,7 @@ class SlackAdapter(Adapter):
         )
 
         if data.get("ok"):
-            matches = data.get("messages", {}).get("matches", [])
+            matches: list[dict[str, Any]] = data.get("messages", {}).get("matches", [])
             if matches:
                 logger.debug(f"Found {len(matches)} messages via search API")
                 return matches
@@ -432,7 +432,8 @@ class SlackAdapter(Adapter):
         if not data.get("ok"):
             return []
 
-        return data.get("messages", [])
+        messages: list[dict[str, Any]] = data.get("messages", [])
+        return messages
 
     def _parse_message(
         self,
@@ -626,9 +627,11 @@ class SlackAdapter(Adapter):
                 if thread_msgs:
                     # Resolve user names for thread participants
                     for thread_msg in thread_msgs:
-                        user_id = thread_msg.get("user")
-                        if user_id and user_id not in user_names:
-                            user_names[user_id] = await self._resolve_user_name(user_id)
+                        thread_user_id: str | None = thread_msg.get("user")
+                        if thread_user_id and thread_user_id not in user_names:
+                            user_names[thread_user_id] = await self._resolve_user_name(
+                                thread_user_id
+                            )
 
                     parent = self._parse_message(
                         thread_msgs[0], channel_id, channel_name, user_names
