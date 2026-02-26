@@ -12,19 +12,33 @@ context block, and returns it through MCP.
 
 ## Architecture
 - MCP server using the official Python MCP SDK (`mcp` package)
-- On-demand fetching: no background processes, no vector DB, no daemons
-- Sources: Jira REST API, Fireflies GraphQL API, local markdown docs
+- On-demand fetching with optional pre-processing agent
+- Sources: Jira REST API, Fireflies GraphQL API, Slack, Gmail, local markdown docs
 - Synthesis: LLM (Claude Haiku / GPT-4o-mini / Ollama) combines raw data into structured block
-- Cache: simple in-memory TTL cache, no persistent storage
+- Cache: in-memory TTL cache + optional SQLite for pre-built context
 
-### Fetch Strategy (Two-Phase)
-For `get_task_context`, we use a two-phase fetch:
-1. **Phase 1:** Fetch Jira ticket first (need ticket data for doc/meeting matching)
-2. **Phase 2:** Fetch meetings and docs in parallel, using ticket title/components/labels
-   - Meetings: search by ticket ID AND keywords from ticket title
-   - Docs: match by components, labels, keywords; always include standards
+### Plugin System
+Source adapters and synthesis engines are plugins.
+- Plugin interfaces defined in src/devscontext/plugins/base.py
+- Built-in plugins: jira, fireflies, slack, gmail, local_docs
+- External plugins: discovered via Python entry points (devscontext.plugins)
+- Plugins are activated by being listed in .devscontext.yaml
 
-This ensures docs and meetings are contextually relevant to the specific ticket.
+### Pre-processing Agent
+- Watches Jira for tickets entering a configurable status (default: "Ready for Development")
+- Runs a multi-step pipeline: deep fetch → broad search → thorough matching → multi-pass synthesis
+- Stores pre-built context in SQLite (.devscontext/cache.db)
+- MCP server checks pre-built storage first, falls back to on-demand if not found
+- Agent and MCP server are separate processes sharing the same SQLite file
+
+### Fetch Strategy
+Primary source (Jira) fetched first, then all secondary sources in parallel.
+Each source plugin declares if it needs primary context via a needs_primary_context flag.
+
+### Optional RAG
+Disabled by default. When enabled via config, enhances local doc matching
+with embedding-based semantic search. Requires: pip install devscontext[rag]
+Index built manually: devscontext index-docs
 
 ### Tool Behaviors
 - `get_task_context`: Full LLM synthesis, cached
@@ -37,7 +51,15 @@ This ensures docs and meetings are contextually relevant to the specific ticket.
 - `httpx` - async HTTP client for API calls
 - `click` - CLI framework
 - `pyyaml` - config parsing
-- `anthropic` / `openai` - LLM clients for synthesis (optional deps)
+- `pydantic` - data validation and models
+- `aiosqlite` - async SQLite for pre-built context storage
+
+### Optional Dependencies
+All heavy deps are optional. Core install remains lightweight.
+- `anthropic` / `openai` - LLM clients for synthesis
+- `slack_sdk` - pip install devscontext[slack]
+- `google-api-python-client` - pip install devscontext[gmail]
+- `sentence-transformers` - pip install devscontext[rag]
 
 ## Code Style
 - Use async/await for all I/O operations
@@ -52,12 +74,16 @@ This ensures docs and meetings are contextually relevant to the specific ticket.
 ## Project Structure
 - `src/devscontext/server.py` - MCP server setup and tool registration
 - `src/devscontext/core.py` - main orchestration (fetch -> extract -> synthesize -> return)
-- `src/devscontext/adapters/` - one file per source (jira.py, fireflies.py, local_docs.py)
-- `src/devscontext/adapters/base.py` - abstract base class for adapters
+- `src/devscontext/adapters/` - one file per source (jira.py, fireflies.py, slack.py, gmail.py, local_docs.py)
+- `src/devscontext/plugins/` - plugin system (base.py, registry.py, synthesis.py)
+- `src/devscontext/rag/` - optional RAG support (embeddings.py, index.py)
 - `src/devscontext/synthesis.py` - LLM synthesis prompt and client
 - `src/devscontext/cache.py` - in-memory TTL cache
+- `src/devscontext/storage.py` - SQLite storage for pre-built context
+- `src/devscontext/preprocessor.py` - pre-processing agent
+- `src/devscontext/watcher.py` - Jira status watcher for agent
 - `src/devscontext/config.py` - YAML config loading and validation
-- `src/devscontext/cli.py` - CLI commands (init, test, serve)
+- `src/devscontext/cli.py` - CLI commands (init, test, serve, agent)
 - `src/devscontext/utils.py` - text utilities (keyword extraction, truncation)
 
 ## MCP Tools (3 total)
@@ -66,12 +92,13 @@ This ensures docs and meetings are contextually relevant to the specific ticket.
 3. `get_standards(area: str | None)` - coding standards, optionally filtered
 
 ## Key Design Decisions
-- On-demand fetching, NOT background ingestion
-- No vector DB - use API search + keyword matching on local files
-- LLM synthesis happens at retrieval time with fresh data
+- On-demand fetching with optional pre-processing for instant retrieval
+- No external vector DB - use NumPy + cosine similarity for optional RAG
+- LLM synthesis happens at retrieval time (or pre-built by agent)
 - Config via `.devscontext.yaml` in project root
 - Auth credentials via environment variables only (never in config file)
-- Graceful degradation: if Fireflies is not configured, skip it and return Jira + docs only
+- Graceful degradation: if a source is not configured, skip it and return available context
+- Plugin architecture: adapters and synthesis engines are extensible
 
 ### Local Docs Matching
 Local docs are matched to tickets via:
@@ -95,3 +122,8 @@ Docs are classified by path:
 - `devscontext init` - create .devscontext.yaml interactively
 - `devscontext test` - fetch a sample ticket and show synthesized output
 - `devscontext serve` - start MCP server (stdio transport)
+- `devscontext agent start` - start pre-processing agent (watches Jira)
+- `devscontext agent run-once` - process all matching tickets once
+- `devscontext agent status` - show agent and storage status
+- `devscontext agent process TICKET-123` - process a specific ticket
+- `devscontext index-docs` - build RAG index for local docs (requires [rag])
