@@ -24,6 +24,12 @@ Example usage:
 
 from __future__ import annotations
 
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from devscontext.models import RagConfig
+    from devscontext.rag.embeddings import EmbeddingProvider
+
 # Lazy imports to avoid loading heavy dependencies unless RAG is used
 _RAG_AVAILABLE: bool | None = None
 
@@ -46,7 +52,7 @@ def is_rag_available() -> bool:
     return _RAG_AVAILABLE
 
 
-def get_embedding_provider(config: "RagConfig") -> "EmbeddingProvider":  # type: ignore[name-defined]
+def get_embedding_provider(config: RagConfig) -> EmbeddingProvider:
     """Factory function to create an embedding provider based on config.
 
     Args:
@@ -65,7 +71,6 @@ def get_embedding_provider(config: "RagConfig") -> "EmbeddingProvider":  # type:
         )
 
     from devscontext.rag.embeddings import (
-        EmbeddingProvider,
         LocalEmbeddingProvider,
         OllamaEmbeddingProvider,
         OpenAIEmbeddingProvider,
