@@ -196,7 +196,7 @@ class OpenAIProvider(LLMProvider):
         """Get or create the OpenAI client."""
         if self._client is None:
             try:
-                from openai import AsyncOpenAI  # type: ignore[import-not-found]
+                from openai import AsyncOpenAI
             except ImportError as e:
                 raise ImportError(
                     "openai package not installed. Install with: pip install devscontext[openai]"
