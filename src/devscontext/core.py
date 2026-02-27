@@ -17,6 +17,11 @@ Example:
     )
     core = DevsContextCore(config)
     result = await core.get_task_context("PROJ-123")
+
+Demo mode:
+    # Run without configuration using sample data
+    core = DevsContextCore(demo_mode=True)
+    result = await core.get_task_context("PROJ-123")  # Returns demo context
 """
 
 from __future__ import annotations
@@ -50,18 +55,43 @@ class DevsContextCore:
         - Caching results to avoid redundant API calls
 
     Uses PluginRegistry for managing adapters and synthesis plugins.
+
+    Demo mode:
+        When demo_mode=True, the core returns realistic sample data without
+        requiring any configuration or external API connections.
     """
 
-    def __init__(self, config: DevsContextConfig) -> None:
+    def __init__(
+        self,
+        config: DevsContextConfig | None = None,
+        *,
+        demo_mode: bool = False,
+    ) -> None:
         """Initialize the core with configuration.
 
         Args:
             config: DevsContextConfig containing sources, synthesis, and cache settings.
+                    Optional if demo_mode is True.
+            demo_mode: If True, use sample data instead of real adapters.
+                       No configuration required in demo mode.
         """
+        self._demo_mode = demo_mode
         self._config = config
+        self._cache: SimpleCache | None = None
+        self._storage: PrebuiltContextStorage | None = None
+        self._storage_initialized = True
+        self._registry: PluginRegistry | None = None
+
+        # In demo mode, skip all initialization
+        if demo_mode:
+            logger.info("DevsContextCore initialized in demo mode")
+            return
+
+        # Normal mode requires config
+        if config is None:
+            raise ValueError("config is required when demo_mode is False")
 
         # Initialize cache if enabled
-        self._cache: SimpleCache | None = None
         if config.cache.enabled:
             self._cache = SimpleCache(
                 ttl=config.cache.ttl_seconds,
@@ -69,12 +99,9 @@ class DevsContextCore:
             )
 
         # Initialize pre-built context storage if configured
-        self._storage: PrebuiltContextStorage | None = None
         if config.storage.path:
             self._storage = PrebuiltContextStorage(config.storage.path)
             self._storage_initialized = False
-        else:
-            self._storage_initialized = True  # No storage to initialize
 
         # Initialize plugin registry
         self._registry = PluginRegistry()
@@ -103,6 +130,8 @@ class DevsContextCore:
         Fetches context from all configured adapters in parallel,
         then uses the LLM to synthesize into structured markdown.
 
+        In demo mode, returns realistic sample context without external calls.
+
         Args:
             task_id: The task identifier (e.g., Jira ticket ID).
             use_cache: Whether to use cached results.
@@ -110,6 +139,10 @@ class DevsContextCore:
         Returns:
             TaskContext with synthesized markdown and metadata.
         """
+        # Demo mode: return sample data immediately
+        if self._demo_mode:
+            return await self._get_demo_context(task_id)
+
         start_time = time.monotonic()
         cache_key = f"context:{task_id}"
 
@@ -169,14 +202,17 @@ class DevsContextCore:
                 sources_used.extend(f"docs:{s.file_path}" for s in ctx.data.sections)
 
         # Synthesize using plugin interface
-        synthesis = self._registry.get_synthesis()
-        if synthesis is None:
+        if self._registry is None:
             synthesized = f"## Task: {task_id}\n\nNo synthesis plugin configured."
         else:
-            synthesized = await synthesis.synthesize(
-                task_id=task_id,
-                source_contexts=source_contexts,
-            )
+            synthesis = self._registry.get_synthesis()
+            if synthesis is None:
+                synthesized = f"## Task: {task_id}\n\nNo synthesis plugin configured."
+            else:
+                synthesized = await synthesis.synthesize(
+                    task_id=task_id,
+                    source_contexts=source_contexts,
+                )
 
         duration_ms = int((time.monotonic() - start_time) * 1000)
 
@@ -223,6 +259,9 @@ class DevsContextCore:
         Returns:
             Dict mapping adapter names to their SourceContext.
         """
+        # This method is only called in non-demo mode where registry is initialized
+        assert self._registry is not None
+
         source_contexts: dict[str, SourceContext] = {}
 
         # Phase 1: Fetch from primary adapters (typically Jira)
@@ -274,6 +313,12 @@ class DevsContextCore:
         Returns:
             Dictionary mapping adapter names to health status.
         """
+        if self._demo_mode:
+            return {"demo": True}
+
+        if self._registry is None:
+            return {}
+
         results = await self._registry.health_check_all()
         logger.info("Health check completed", extra={"adapters": results})
         return results
@@ -309,6 +354,10 @@ class DevsContextCore:
         Returns:
             Dictionary with formatted results and metadata.
         """
+        # Demo mode: return sample search results
+        if self._demo_mode:
+            return self._get_demo_search_results(query)
+
         start_time = time.monotonic()
         logger.info("Search context", extra={"query": query})
 
@@ -376,6 +425,8 @@ class DevsContextCore:
 
     async def _search_jira(self, query: str) -> list[JiraTicket]:
         """Search Jira for matching issues."""
+        if self._registry is None:
+            return []
         jira = self._registry.get_adapter("jira")
         if jira is None:
             return []
@@ -383,6 +434,8 @@ class DevsContextCore:
 
     async def _search_meetings(self, query: str) -> MeetingContext:
         """Search meeting transcripts for query."""
+        if self._registry is None:
+            return MeetingContext(meetings=[])
         fireflies = self._registry.get_adapter("fireflies")
         if fireflies is None:
             return MeetingContext(meetings=[])
@@ -390,6 +443,8 @@ class DevsContextCore:
 
     async def _search_docs(self, query: str) -> DocsContext:
         """Search local documentation for query."""
+        if self._registry is None:
+            return DocsContext(sections=[])
         docs = self._registry.get_adapter("local_docs")
         if docs is None:
             return DocsContext(sections=[])
@@ -443,10 +498,16 @@ class DevsContextCore:
         Returns:
             Dictionary containing standards content and metadata.
         """
+        # Demo mode: return sample standards
+        if self._demo_mode:
+            return self._get_demo_standards(area)
+
         start_time = time.monotonic()
         logger.info("Get standards", extra={"area": area})
 
-        docs = self._registry.get_adapter("local_docs")
+        docs = None
+        if self._registry is not None:
+            docs = self._registry.get_adapter("local_docs")
         available_areas: list[str] = []
 
         if docs is None:
@@ -575,8 +636,137 @@ Try one of the areas above, or omit the area parameter to see all standards.
             )
             return None
 
+    def _get_demo_search_results(self, query: str) -> dict[str, str | list[str] | int]:
+        """Get demo search results for any query.
+
+        Args:
+            query: The search query.
+
+        Returns:
+            Dictionary with formatted demo results.
+        """
+        results = f"""## Search Results for "{query}"
+
+### Jira Tickets
+- **PROJ-123**: Add retry logic to payment webhook handler [In Progress] — Alex Chen
+- **PROJ-456**: Payment webhook initial implementation [Done]
+
+### Meeting Discussions
+
+**Sprint 23 Planning - Payments Team** (2024-03-15)
+Discussion about webhook retry approaches. Decision: Use SQS visibility timeout
+for retry scheduling instead of cron jobs.
+
+### Documentation
+
+**Webhook Processing Flow** [architecture]
+*Source: docs/architecture/payments-service.md*
+Webhook flow: Stripe → POST /webhooks/stripe → Signature Check → SQS Queue...
+
+**Error Handling** [standards]
+*Source: docs/standards/typescript.md*
+Use Result<T, E> pattern for operations that can fail. Never throw exceptions...
+"""
+
+        return {
+            "query": query,
+            "results": results,
+            "sources": ["jira", "fireflies", "docs"],
+            "result_count": 5,
+            "duration_ms": 50,
+        }
+
+    def _get_demo_standards(self, area: str | None) -> dict[str, str | None | int | list[str]]:
+        """Get demo coding standards.
+
+        Args:
+            area: Optional area filter.
+
+        Returns:
+            Dictionary with demo standards content.
+        """
+        content = """# Coding Standards
+
+## Error Handling
+
+### Result Pattern
+Use `Result<T, E>` pattern for operations that can fail. Never throw exceptions from business logic.
+
+```typescript
+import { Result, ok, err } from '@/utils/result';
+
+async function processWebhook(event: WebhookEvent): Promise<Result<void, WebhookError>> {
+    const validated = validateEvent(event);
+    if (!validated.ok) {
+        return err(new WebhookError('VALIDATION_FAILED', validated.error));
+    }
+    return ok(undefined);
+}
+```
+
+## Testing
+
+### Mocking SQS
+Use `@aws-sdk/client-sqs-mock` for unit tests:
+
+```typescript
+import { mockClient } from 'aws-sdk-client-mock';
+import { SQSClient, SendMessageCommand } from '@aws-sdk/client-sqs';
+
+const sqsMock = mockClient(SQSClient);
+
+it('should retry failed webhooks', async () => {
+    sqsMock.on(SendMessageCommand).resolves({ MessageId: 'test-123' });
+    await retryWebhook(failedEvent);
+    expect(sqsMock.calls()).toHaveLength(1);
+});
+```
+"""
+
+        return {
+            "area": area,
+            "content": content,
+            "section_count": 2,
+            "available_areas": ["typescript", "testing", "error-handling"],
+            "duration_ms": 10,
+        }
+
+    async def _get_demo_context(self, task_id: str) -> TaskContext:
+        """Get demo context with sample data.
+
+        Returns realistic sample context for PROJ-123 (payment webhook retry).
+        Uses pre-baked synthesis output - no LLM required.
+
+        Args:
+            task_id: The task identifier (ignored, always returns PROJ-123 context).
+
+        Returns:
+            TaskContext with sample synthesized markdown.
+        """
+        from devscontext.demo_data import DEMO_TASK_ID, get_demo_synthesis
+
+        # Always return the demo context regardless of task_id
+        # This makes any ticket ID work in demo mode
+        synthesized = get_demo_synthesis()
+
+        logger.info(
+            "Demo context returned",
+            extra={"requested_task_id": task_id, "demo_task_id": DEMO_TASK_ID},
+        )
+
+        return TaskContext(
+            task_id=DEMO_TASK_ID,
+            synthesized=synthesized,
+            sources_used=["jira:PROJ-123", "fireflies:2024-03-15", "docs:payments-service.md"],
+            fetch_duration_ms=50,  # Fast since it's demo
+            synthesized_at=datetime.now(UTC),
+            cached=False,
+            prebuilt=False,
+        )
+
     async def close(self) -> None:
         """Close all adapter connections and clean up resources."""
-        await self._registry.close_all()
+        if self._registry is not None:
+            await self._registry.close_all()
         if self._storage is not None:
             await self._storage.close()

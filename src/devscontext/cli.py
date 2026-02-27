@@ -270,24 +270,107 @@ def test(ctx: click.Context, task: str | None) -> None:
 
 
 @cli.command()
+@click.option("--demo", is_flag=True, help="Run in demo mode with sample data (no config needed)")
 @click.pass_context
-def serve(ctx: click.Context) -> None:
-    """Start the MCP server (stdio transport)."""
+def serve(ctx: click.Context, demo: bool) -> None:
+    """Start the MCP server (stdio transport).
 
+    Use --demo to run without configuration. The server will respond
+    to any ticket ID with sample context for a payment webhook task.
+
+    \b
+    Examples:
+        devscontext serve              # Normal mode (requires config)
+        devscontext serve --demo       # Demo mode (no config needed)
+
+    \b
+    Connect to Claude Code:
+        claude mcp add devscontext -- devscontext serve
+        claude mcp add devscontext-demo -- devscontext serve --demo
+    """
     # Print startup message to stderr (stdout is for MCP protocol)
+    mode = " (demo mode)" if demo else ""
     click.echo(
-        click.style("DevsContext", bold=True) + " MCP server running",
+        click.style("DevsContext", bold=True) + f" MCP server running{mode}",
         err=True,
     )
     click.echo(
         "Tools: get_task_context, search_context, get_standards",
         err=True,
     )
+    if demo:
+        click.echo(
+            "Demo: Returns sample context for PROJ-123 (payment webhooks)",
+            err=True,
+        )
     click.echo(err=True)
 
     from devscontext.server import main as server_main
 
-    server_main()
+    server_main(demo_mode=demo)
+
+
+# =============================================================================
+# DEMO COMMAND
+# =============================================================================
+
+
+@cli.command()
+def demo() -> None:
+    """Run demo mode - shows synthesized output from sample data.
+
+    No configuration or API keys required. Uses realistic sample data
+    for a payments webhook retry task (PROJ-123).
+
+    This is the fastest way to see what DevsContext produces.
+
+    \b
+    Example:
+        devscontext demo
+
+    \b
+    To try the full MCP server in demo mode:
+        devscontext serve --demo
+        claude mcp add devscontext-demo -- devscontext serve --demo
+    """
+    import asyncio
+
+    from devscontext.core import DevsContextCore
+
+    click.echo()
+    click.echo(click.style("DevsContext Demo", bold=True))
+    click.echo("=" * 60)
+    click.echo()
+    click.echo(
+        "Sample task: "
+        + click.style("PROJ-123", fg="cyan")
+        + " — Add retry logic to payment webhook handler"
+    )
+    click.echo()
+    click.echo("-" * 60)
+    click.echo()
+
+    async def run_demo() -> str:
+        core = DevsContextCore(demo_mode=True)
+        result = await core.get_task_context("PROJ-123")
+        return result.synthesized
+
+    try:
+        output = asyncio.run(run_demo())
+        click.echo(output)
+        click.echo()
+        click.echo("-" * 60)
+        click.echo()
+        click.echo(_info("This is what DevsContext synthesizes from Jira, meetings, and docs."))
+        click.echo()
+        click.echo("Next steps:")
+        click.echo("  1. " + click.style("devscontext init", fg="green") + " — Configure sources")
+        click.echo("  2. " + click.style("devscontext serve", fg="green") + " — Start MCP server")
+        click.echo("  3. " + click.style("claude mcp add devscontext", fg="green"))
+        click.echo()
+    except Exception as e:
+        click.echo(_error(f"Demo failed: {e}"), err=True)
+        sys.exit(1)
 
 
 # =============================================================================

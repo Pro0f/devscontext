@@ -6,7 +6,9 @@
       "Bash(pytest:*)",
       "Bash(ruff format:*)",
       "Bash(python3 -m pytest:*)",
-      "Bash(python3 -m mypy:*)"
+      "Bash(python3 -m mypy:*)",
+      "Bash(find:*)",
+      "Bash(tree:*)"
     ]
   }
 }

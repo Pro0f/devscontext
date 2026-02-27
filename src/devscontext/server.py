@@ -32,24 +32,29 @@ logger = get_logger(__name__)
 # Initialize the MCP server
 server = Server("devscontext")
 
-# Global core instance (initialized on startup)
+# Global state
 _core: DevsContextCore | None = None
+_demo_mode: bool = False
 
 
 def get_core() -> DevsContextCore:
     """Get or create the global DevsContextCore instance.
 
     Lazily initializes the core on first access using
-    the configuration loaded from the config file.
+    the configuration loaded from the config file (or demo mode).
 
     Returns:
         The singleton DevsContextCore instance.
     """
     global _core
     if _core is None:
-        config = load_devscontext_config()
-        _core = DevsContextCore(config)
-        logger.info("DevsContextCore initialized")
+        if _demo_mode:
+            _core = DevsContextCore(demo_mode=True)
+            logger.info("DevsContextCore initialized in demo mode")
+        else:
+            config = load_devscontext_config()
+            _core = DevsContextCore(config)
+            logger.info("DevsContextCore initialized")
     return _core
 
 
@@ -362,11 +367,16 @@ async def run_server() -> None:
         )
 
 
-def main() -> None:
+def main(demo_mode: bool = False) -> None:
     """Entry point for the MCP server.
+
+    Args:
+        demo_mode: If True, use sample data instead of real adapters.
 
     Configures logging and runs the async server.
     """
+    global _demo_mode
+    _demo_mode = demo_mode
     asyncio.run(run_server())
 
 
