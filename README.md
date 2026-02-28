@@ -6,6 +6,15 @@ MCP server that gives AI coding agents synthesized engineering context — requi
 
 AI coding agents lack context. They don't know your team's decisions, architecture patterns, or coding standards. Connecting raw MCP servers floods them with irrelevant data they can't prioritize. Large companies build internal context infrastructure. DevsContext brings that to everyone.
 
+## Try It Now
+
+```bash
+pip install devscontext
+devscontext demo
+```
+
+No API keys needed. Shows synthesized context for a sample payments ticket.
+
 ## What You Get
 
 When you say "work on PROJ-123" in Claude Code, DevsContext fetches from Jira, meeting transcripts, and your docs, then synthesizes it into this:
@@ -77,6 +86,15 @@ Then in Claude Code:
 ```
 > work on PROJ-123
 ```
+
+## Works With
+
+| IDE / Tool | Setup Guide | Status |
+|-----------|-------------|--------|
+| Claude Code | [Quick Start](#quick-start) | Tested |
+| Cursor | [Setup Guide](docs/cursor-setup.md) | Tested |
+| Windsurf | [Setup Guide](docs/windsurf-setup.md) | Tested |
+| Any MCP client | `devscontext serve` via stdio | Compatible |
 
 ## Supported Sources
 
