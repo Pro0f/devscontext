@@ -198,7 +198,8 @@ class TestGitHubAdapter:
                 return httpx.Response(200, json={"total_count": 0, "items": []})
 
             # PR details
-            if "/repos/org/test-repo/pulls/234" in url and "/files" not in url and "/comments" not in url:
+            is_pr_234 = "/repos/org/test-repo/pulls/234" in url
+            if is_pr_234 and "/files" not in url and "/comments" not in url:
                 return httpx.Response(200, json=SAMPLE_PR_DETAILS_RESPONSE)
 
             # PR files
@@ -306,7 +307,8 @@ class TestGitHubAdapter:
                 return httpx.Response(200, json=recent_prs)
 
             # PR 300 details (payments)
-            if "/repos/org/test-repo/pulls/300" in url and "/files" not in url and "/comments" not in url:
+            is_pr_300 = "/repos/org/test-repo/pulls/300" in url
+            if is_pr_300 and "/files" not in url and "/comments" not in url:
                 return httpx.Response(200, json={
                     "number": 300,
                     "title": "Update payments service",
@@ -324,7 +326,8 @@ class TestGitHubAdapter:
                 return httpx.Response(200, json=[])
 
             # PR 301 details (unrelated)
-            if "/repos/org/test-repo/pulls/301" in url and "/files" not in url and "/comments" not in url:
+            is_pr_301 = "/repos/org/test-repo/pulls/301" in url
+            if is_pr_301 and "/files" not in url and "/comments" not in url:
                 return httpx.Response(200, json={
                     "number": 301,
                     "title": "Update unrelated service",
@@ -373,7 +376,8 @@ class TestGitHubAdapter:
                 return httpx.Response(200, json=SAMPLE_SEARCH_ISSUES_RESPONSE)
 
             # PR details
-            if "/repos/org/test-repo/pulls/234" in url and "/files" not in url and "/comments" not in url:
+            is_pr_234 = "/repos/org/test-repo/pulls/234" in url
+            if is_pr_234 and "/files" not in url and "/comments" not in url:
                 return httpx.Response(200, json=SAMPLE_PR_DETAILS_RESPONSE)
 
             # PR files
