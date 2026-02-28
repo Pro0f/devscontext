@@ -172,7 +172,7 @@ class AnthropicProvider(LLMProvider):
         """Get or create the Anthropic client."""
         if self._client is None:
             try:
-                from anthropic import AsyncAnthropic
+                from anthropic import AsyncAnthropic  # type: ignore[import-not-found]
             except ImportError as e:
                 raise ImportError(
                     "anthropic package not installed. "
