@@ -8,7 +8,8 @@
       "Bash(python3 -m pytest:*)",
       "Bash(python3 -m mypy:*)",
       "Bash(find:*)",
-      "Bash(tree:*)"
+      "Bash(tree:*)",
+      "Bash(python -m pytest:*)"
     ]
   }
 }

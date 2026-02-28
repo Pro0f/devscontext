@@ -35,6 +35,7 @@ from devscontext.plugins.base import SourceContext, SynthesisPlugin
 if TYPE_CHECKING:
     from devscontext.models import (
         DocsContext,
+        GitHubContext,
         GmailContext,
         JiraContext,
         MeetingContext,
@@ -113,6 +114,14 @@ Section-specific guidance:
   - Testing requirements (what needs tests, mocking strategy)
   - Async patterns to follow
 - Do NOT include generic advice like "write clean code"
+
+### Recent Changes
+- Extract from GitHub PRs that touch the same files or service area
+- Keep brief — just the relevant PRs, not every recent merge
+- Include reviewer comments only if relevant to current task
+- Focus on patterns from recent PRs (what conventions to follow)
+- Note any files recently changed (avoid merge conflicts)
+- Mark as [GitHub PR #N] for source attribution
 
 ### Related Work
 - Linked tickets and their status
@@ -522,6 +531,51 @@ class LLMSynthesisPlugin(SynthesisPlugin):
 
         return "\n".join(parts)
 
+    def _format_github_context(self, ctx: GitHubContext) -> str:
+        """Format GitHub context as raw data for the prompt."""
+        if not ctx.related_prs and not ctx.recent_prs and not ctx.related_issues:
+            return ""
+
+        from datetime import UTC, datetime
+
+        parts = ["## GITHUB CONTEXT"]
+        parts.append("*Recent PRs and changes in the same service area.*\n")
+
+        # Related PRs (mention ticket or same files)
+        if ctx.related_prs:
+            parts.append("### Related PRs")
+            for pr in ctx.related_prs:
+                status = "merged" if pr.merged_at else pr.state
+                parts.append(f"\n**PR #{pr.number}**: {pr.title} ({status})")
+                parts.append(f"Author: @{pr.author}")
+                if pr.changed_files:
+                    files_str = ", ".join(pr.changed_files[:5])
+                    if len(pr.changed_files) > 5:
+                        files_str += f" (+{len(pr.changed_files) - 5} more)"
+                    parts.append(f"Changed: {files_str}")
+                for comment in pr.review_comments[:3]:
+                    body = comment.body[:200]
+                    if len(comment.body) > 200:
+                        body += "..."
+                    parts.append(f"Review (@{comment.author}): {body}")
+
+        # Recent PRs in same area
+        if ctx.recent_prs:
+            parts.append("\n### Recent PRs in Service Area")
+            for pr in ctx.recent_prs[:5]:
+                merge_date = pr.merged_at or pr.created_at
+                days_ago = (datetime.now(UTC) - merge_date).days
+                parts.append(f"- PR #{pr.number}: {pr.title} ({days_ago}d ago)")
+
+        # Related issues
+        if ctx.related_issues:
+            parts.append("\n### Related Issues")
+            for issue in ctx.related_issues:
+                labels_str = f" [{', '.join(issue.labels)}]" if issue.labels else ""
+                parts.append(f"- #{issue.number}: {issue.title} ({issue.state}){labels_str}")
+
+        return "\n".join(parts)
+
     def _build_raw_data(
         self,
         jira_context: JiraContext | None,
@@ -529,6 +583,7 @@ class LLMSynthesisPlugin(SynthesisPlugin):
         docs_context: DocsContext | None,
         slack_context: SlackContext | None = None,
         gmail_context: GmailContext | None = None,
+        github_context: GitHubContext | None = None,
     ) -> str:
         """Build the raw data section for the synthesis prompt.
 
@@ -538,6 +593,7 @@ class LLMSynthesisPlugin(SynthesisPlugin):
             docs_context: Documentation context (if available).
             slack_context: Slack discussions context (if available).
             gmail_context: Gmail email context (if available).
+            github_context: GitHub PRs and issues context (if available).
 
         Returns:
             Formatted raw data string.
@@ -559,6 +615,14 @@ class LLMSynthesisPlugin(SynthesisPlugin):
         # Email context (external communications)
         if gmail_context and gmail_context.threads:
             sections.append(self._format_gmail_context(gmail_context))
+
+        # GitHub context (PRs, issues, recent changes)
+        if github_context and (
+            github_context.related_prs
+            or github_context.recent_prs
+            or github_context.related_issues
+        ):
+            sections.append(self._format_github_context(github_context))
 
         # Documentation - split by type for better synthesis
         if docs_context and docs_context.sections:
@@ -590,6 +654,7 @@ class LLMSynthesisPlugin(SynthesisPlugin):
         docs_context: DocsContext | None,
         slack_context: SlackContext | None = None,
         gmail_context: GmailContext | None = None,
+        github_context: GitHubContext | None = None,
     ) -> str:
         """Format context as plain markdown when LLM synthesis fails.
 
@@ -602,6 +667,7 @@ class LLMSynthesisPlugin(SynthesisPlugin):
             docs_context: Documentation context (if available).
             slack_context: Slack discussions context (if available).
             gmail_context: Gmail email context (if available).
+            github_context: GitHub PRs and issues context (if available).
 
         Returns:
             Plain markdown formatted context.
@@ -610,7 +676,12 @@ class LLMSynthesisPlugin(SynthesisPlugin):
         parts.append("\n*Note: LLM synthesis unavailable, showing raw context.*\n")
 
         raw_data = self._build_raw_data(
-            jira_context, meeting_context, docs_context, slack_context, gmail_context
+            jira_context,
+            meeting_context,
+            docs_context,
+            slack_context,
+            gmail_context,
+            github_context,
         )
         parts.append(raw_data)
 
@@ -637,6 +708,7 @@ class LLMSynthesisPlugin(SynthesisPlugin):
         # Extract typed contexts from source_contexts
         from devscontext.models import (
             DocsContext,
+            GitHubContext,
             GmailContext,
             JiraContext,
             MeetingContext,
@@ -648,6 +720,7 @@ class LLMSynthesisPlugin(SynthesisPlugin):
         docs_context: DocsContext | None = None
         slack_context: SlackContext | None = None
         gmail_context: GmailContext | None = None
+        github_context: GitHubContext | None = None
 
         for _name, ctx in source_contexts.items():
             if ctx.is_empty():
@@ -663,10 +736,17 @@ class LLMSynthesisPlugin(SynthesisPlugin):
                 slack_context = ctx.data
             elif isinstance(ctx.data, GmailContext):
                 gmail_context = ctx.data
+            elif isinstance(ctx.data, GitHubContext):
+                github_context = ctx.data
 
         # Build raw data
         raw_data = self._build_raw_data(
-            jira_context, meeting_context, docs_context, slack_context, gmail_context
+            jira_context,
+            meeting_context,
+            docs_context,
+            slack_context,
+            gmail_context,
+            github_context,
         )
 
         if raw_data == "No context data available.":
@@ -704,7 +784,13 @@ class LLMSynthesisPlugin(SynthesisPlugin):
                 extra={"error": str(e), "provider": self._config.provider},
             )
             return self._format_fallback(
-                task_id, jira_context, meeting_context, docs_context, slack_context, gmail_context
+                task_id,
+                jira_context,
+                meeting_context,
+                docs_context,
+                slack_context,
+                gmail_context,
+                github_context,
             )
 
         except ValueError as e:
@@ -713,7 +799,13 @@ class LLMSynthesisPlugin(SynthesisPlugin):
                 extra={"error": str(e), "provider": self._config.provider},
             )
             return self._format_fallback(
-                task_id, jira_context, meeting_context, docs_context, slack_context, gmail_context
+                task_id,
+                jira_context,
+                meeting_context,
+                docs_context,
+                slack_context,
+                gmail_context,
+                github_context,
             )
 
         except Exception as e:
@@ -722,7 +814,13 @@ class LLMSynthesisPlugin(SynthesisPlugin):
                 extra={"error": str(e), "provider": self._config.provider},
             )
             return self._format_fallback(
-                task_id, jira_context, meeting_context, docs_context, slack_context, gmail_context
+                task_id,
+                jira_context,
+                meeting_context,
+                docs_context,
+                slack_context,
+                gmail_context,
+                github_context,
             )
 
 
@@ -798,6 +896,7 @@ class TemplateSynthesisPlugin(SynthesisPlugin):
         - docs: DocsContext if available
         - slack: SlackContext if available
         - gmail: GmailContext if available
+        - github: GitHubContext if available
 
         Args:
             task_id: The task identifier.
@@ -808,6 +907,7 @@ class TemplateSynthesisPlugin(SynthesisPlugin):
         """
         from devscontext.models import (
             DocsContext,
+            GitHubContext,
             GmailContext,
             JiraContext,
             MeetingContext,
@@ -820,6 +920,7 @@ class TemplateSynthesisPlugin(SynthesisPlugin):
         docs_context: DocsContext | None = None
         slack_context: SlackContext | None = None
         gmail_context: GmailContext | None = None
+        github_context: GitHubContext | None = None
 
         for _name, ctx in source_contexts.items():
             if ctx.is_empty():
@@ -834,6 +935,8 @@ class TemplateSynthesisPlugin(SynthesisPlugin):
                 slack_context = ctx.data
             elif isinstance(ctx.data, GmailContext):
                 gmail_context = ctx.data
+            elif isinstance(ctx.data, GitHubContext):
+                github_context = ctx.data
 
         try:
             template = self._get_template()
@@ -844,6 +947,7 @@ class TemplateSynthesisPlugin(SynthesisPlugin):
                     jira=jira_context,
                     meetings=meeting_context,
                     docs=docs_context,
+                    github=github_context,
                     slack=slack_context,
                     gmail=gmail_context,
                 )
@@ -897,6 +1001,7 @@ class PassthroughSynthesisPlugin(SynthesisPlugin):
         """
         from devscontext.models import (
             DocsContext,
+            GitHubContext,
             GmailContext,
             JiraContext,
             MeetingContext,
@@ -928,6 +1033,8 @@ class PassthroughSynthesisPlugin(SynthesisPlugin):
                 parts.append(self._format_slack(ctx.data))
             elif isinstance(ctx.data, GmailContext):
                 parts.append(self._format_gmail(ctx.data))
+            elif isinstance(ctx.data, GitHubContext):
+                parts.append(self._format_github(ctx.data))
             elif ctx.raw_text:
                 parts.append(ctx.raw_text)
             else:
@@ -1048,6 +1155,34 @@ class PassthroughSynthesisPlugin(SynthesisPlugin):
             for msg in thread.messages[:2]:
                 sender = msg.sender_name or msg.sender
                 lines.append(f"\n{sender}: {msg.snippet[:200]}...")
+            lines.append("")
+
+        return "\n".join(lines)
+
+    def _format_github(self, ctx: GitHubContext) -> str:
+        """Format GitHub context as markdown."""
+        if not ctx.related_prs and not ctx.recent_prs and not ctx.related_issues:
+            return "*No GitHub context found*"
+
+        lines = []
+
+        if ctx.related_prs:
+            lines.append("**Related PRs:**")
+            for pr in ctx.related_prs:
+                status = "merged" if pr.merged_at else pr.state
+                lines.append(f"- PR #{pr.number}: {pr.title} ({status})")
+            lines.append("")
+
+        if ctx.recent_prs:
+            lines.append("**Recent PRs:**")
+            for pr in ctx.recent_prs[:5]:
+                lines.append(f"- PR #{pr.number}: {pr.title}")
+            lines.append("")
+
+        if ctx.related_issues:
+            lines.append("**Related Issues:**")
+            for issue in ctx.related_issues:
+                lines.append(f"- #{issue.number}: {issue.title} ({issue.state})")
             lines.append("")
 
         return "\n".join(lines)

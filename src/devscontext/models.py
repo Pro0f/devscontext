@@ -152,6 +152,30 @@ class GmailConfig(BaseModel):
     primary: bool = Field(default=False, description="Whether this is a primary source")
 
 
+class GitHubConfig(BaseModel):
+    """GitHub adapter configuration."""
+
+    token: str = Field(default="", description="GitHub Personal Access Token (from env)")
+    repos: list[str] = Field(
+        default_factory=list,
+        description="Repositories to search (e.g., ['org/repo-name'])",
+    )
+    recent_pr_days: int = Field(
+        default=14,
+        ge=1,
+        le=90,
+        description="Days to look back for recent PRs",
+    )
+    max_prs: int = Field(
+        default=10,
+        ge=1,
+        le=50,
+        description="Maximum PRs to return",
+    )
+    enabled: bool = Field(default=False, description="Whether adapter is enabled")
+    primary: bool = Field(default=False, description="Whether this is a primary source")
+
+
 class SynthesisConfig(BaseModel):
     """Synthesis configuration supporting multiple synthesis plugins."""
 
@@ -259,6 +283,7 @@ class SourcesConfig(BaseModel):
     docs: DocsConfig = Field(default_factory=DocsConfig)
     slack: SlackConfig = Field(default_factory=SlackConfig)
     gmail: GmailConfig = Field(default_factory=GmailConfig)
+    github: GitHubConfig = Field(default_factory=GitHubConfig)
 
 
 class DevsContextConfig(BaseModel):
@@ -418,6 +443,64 @@ class GmailContext(BaseModel):
     """All Gmail context found for a task."""
 
     threads: list[GmailThread] = Field(default_factory=list, description="Relevant email threads")
+
+
+# =============================================================================
+# GITHUB DATA MODELS
+# =============================================================================
+
+
+class GitHubReviewComment(BaseModel):
+    """A review comment on a GitHub PR."""
+
+    author: str = Field(..., description="Comment author's GitHub username")
+    body: str = Field(..., description="Comment text content")
+    path: str | None = Field(default=None, description="File path the comment is on")
+    created_at: datetime = Field(..., description="When comment was created (UTC)")
+
+
+class GitHubPR(BaseModel):
+    """A GitHub Pull Request."""
+
+    number: int = Field(..., description="PR number")
+    title: str = Field(..., description="PR title")
+    author: str = Field(..., description="PR author's GitHub username")
+    state: str = Field(..., description="PR state (open, closed, merged)")
+    url: str = Field(..., description="URL to the PR")
+    created_at: datetime = Field(..., description="When PR was created (UTC)")
+    merged_at: datetime | None = Field(default=None, description="When PR was merged (UTC)")
+    changed_files: list[str] = Field(default_factory=list, description="List of changed file paths")
+    review_comments: list[GitHubReviewComment] = Field(
+        default_factory=list, description="Review comments on the PR"
+    )
+    body: str | None = Field(default=None, description="PR description")
+
+
+class GitHubIssue(BaseModel):
+    """A GitHub Issue."""
+
+    number: int = Field(..., description="Issue number")
+    title: str = Field(..., description="Issue title")
+    author: str = Field(..., description="Issue author's GitHub username")
+    state: str = Field(..., description="Issue state (open, closed)")
+    url: str = Field(..., description="URL to the issue")
+    created_at: datetime = Field(..., description="When issue was created (UTC)")
+    labels: list[str] = Field(default_factory=list, description="Labels on the issue")
+    body: str | None = Field(default=None, description="Issue description")
+
+
+class GitHubContext(BaseModel):
+    """All GitHub context found for a task."""
+
+    related_prs: list[GitHubPR] = Field(
+        default_factory=list, description="PRs that mention the ticket or touch same files"
+    )
+    recent_prs: list[GitHubPR] = Field(
+        default_factory=list, description="Recent merged PRs in the same service area"
+    )
+    related_issues: list[GitHubIssue] = Field(
+        default_factory=list, description="Issues that mention the ticket"
+    )
 
 
 # =============================================================================
