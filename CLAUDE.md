@@ -118,6 +118,14 @@ Docs are classified by path:
 - Mock external APIs in tests (httpx mock)
 - Test the synthesis prompt with fixture data
 
+## Completion Checklist
+Before considering any task complete, ALL of these must pass:
+1. `pytest` - all tests pass
+2. `ruff check src/ tests/` - no lint errors
+3. `mypy src/` - no type errors
+
+Do not finish until everything is checked.
+
 ## Commands
 - `devscontext init` - create .devscontext.yaml interactively
 - `devscontext test` - fetch a sample ticket and show synthesized output
