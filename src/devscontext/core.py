@@ -323,6 +323,133 @@ class DevsContextCore:
         logger.info("Health check completed", extra={"adapters": results})
         return results
 
+    async def get_status(self) -> str:
+        """Get configuration and health status of all sources.
+
+        Returns a formatted status report including:
+        - Version
+        - Source adapter connectivity
+        - Synthesis configuration
+        - Pre-processing agent status
+        - Cache status
+
+        Returns:
+            Formatted status string.
+        """
+        from devscontext.constants import VERSION
+
+        lines = [f"DevsContext v{VERSION}", "", "Sources:"]
+
+        # Demo mode
+        if self._demo_mode:
+            lines.append("  ✅ Demo Mode — sample data")
+            lines.extend(["", "Synthesis:", "  Demo mode (no LLM)"])
+            lines.extend(["", "Pre-processing:", "  Agent: disabled", "  Pre-built contexts: 0"])
+            lines.extend(["", "Cache:", "  Disabled"])
+            return "\n".join(lines)
+
+        # Check each adapter's health
+        if self._registry is not None:
+            adapters = self._registry.get_active_adapters()
+            if not adapters:
+                lines.append("  No sources configured")
+            else:
+                for name, adapter in adapters.items():
+                    healthy = await adapter.health_check()
+                    status_icon = "✅" if healthy else "❌"
+                    detail = self._get_adapter_detail(name, adapter)
+                    display_name = name.replace("_", " ").title()
+                    lines.append(f"  {status_icon} {display_name} — {detail}")
+        else:
+            lines.append("  No sources configured")
+
+        # Synthesis info
+        lines.extend(["", "Synthesis:"])
+        if self._config and self._config.synthesis:
+            synth = self._config.synthesis
+            lines.append(f"  Provider: {synth.provider} ({synth.model})")
+            lines.append(f"  Max output: {synth.max_output_tokens} tokens")
+        else:
+            lines.append("  Not configured")
+
+        # Pre-processing info
+        lines.extend(["", "Pre-processing:"])
+        if self._config and self._config.agents and self._config.agents.preprocessor.enabled:
+            count = await self._get_prebuilt_count()
+            lines.append("  Agent: enabled")
+            lines.append(f"  Pre-built contexts: {count}")
+        else:
+            lines.append("  Agent: disabled")
+            lines.append("  Pre-built contexts: 0")
+
+        # Cache info
+        lines.extend(["", "Cache:"])
+        if self._cache and self._config:
+            ttl_minutes = self._config.cache.ttl_seconds // 60
+            lines.append(f"  TTL: {ttl_minutes} minutes")
+            lines.append(f"  Cached entries: {len(self._cache)}")
+        else:
+            lines.append("  Disabled")
+
+        return "\n".join(lines)
+
+    def _get_adapter_detail(self, name: str, adapter: object) -> str:
+        """Get status detail string for an adapter.
+
+        Args:
+            name: Adapter name.
+            adapter: Adapter instance.
+
+        Returns:
+            Status detail string.
+        """
+        config = getattr(adapter, "_config", None)
+        if not config:
+            return "not configured"
+
+        if not getattr(config, "enabled", True):
+            return "disabled"
+
+        # Source-specific details
+        if name == "jira" and hasattr(config, "base_url") and config.base_url:
+            return f"connected ({config.base_url})"
+        elif name == "github" and hasattr(config, "repos") and config.repos:
+            repos = ", ".join(config.repos[:2])
+            if len(config.repos) > 2:
+                repos += f" +{len(config.repos) - 2} more"
+            return f"connected ({repos})"
+        elif name == "local_docs" and hasattr(config, "paths"):
+            return f"{len(config.paths)} paths configured"
+        elif name == "fireflies":
+            return "connected"
+        elif name == "slack":
+            if getattr(config, "bot_token", ""):
+                return "connected"
+            return "not configured"
+        elif name == "gmail":
+            if getattr(config, "credentials_file", ""):
+                return "connected"
+            return "not configured"
+
+        return "connected"
+
+    async def _get_prebuilt_count(self) -> int:
+        """Get count of pre-built contexts from storage.
+
+        Returns:
+            Number of pre-built contexts.
+        """
+        if self._storage is None:
+            return 0
+        try:
+            if not self._storage_initialized:
+                await self._storage.initialize()
+                self._storage_initialized = True
+            contexts = await self._storage.list_all()
+            return len(contexts)
+        except Exception:
+            return 0
+
     def invalidate_cache(self, task_id: str | None = None) -> None:
         """Invalidate cached context.
 

@@ -134,6 +134,18 @@ async def list_tools() -> list[Tool]:
                 },
             },
         ),
+        Tool(
+            name="devscontext_status",
+            description=(
+                "Check DevsContext configuration, source connectivity, and health status. "
+                "Use this to verify your setup or debug connection issues."
+            ),
+            inputSchema={
+                "type": "object",
+                "properties": {},
+                "required": [],
+            },
+        ),
     ]
 
 
@@ -168,6 +180,9 @@ async def call_tool(name: str, arguments: dict[str, Any]) -> list[TextContent]:
 
         elif name == "get_standards":
             return await _handle_get_standards(core, arguments, start_time)
+
+        elif name == "devscontext_status":
+            return await _handle_devscontext_status(core, start_time)
 
         else:
             logger.warning("Unknown tool called", extra={"tool": name})
@@ -349,6 +364,44 @@ async def _handle_get_standards(
             TextContent(
                 type="text",
                 text=f"Error fetching standards: {e}",
+            )
+        ]
+
+
+async def _handle_devscontext_status(
+    core: DevsContextCore,
+    start_time: float,
+) -> list[TextContent]:
+    """Handle the devscontext_status tool call.
+
+    Args:
+        core: The DevsContextCore instance.
+        start_time: When the request started for duration logging.
+
+    Returns:
+        List containing TextContent with status report.
+    """
+    try:
+        status = await core.get_status()
+
+        duration_ms = int((time.monotonic() - start_time) * 1000)
+        logger.info(
+            "devscontext_status completed",
+            extra={"duration_ms": duration_ms},
+        )
+
+        return [TextContent(type="text", text=status)]
+
+    except Exception as e:
+        duration_ms = int((time.monotonic() - start_time) * 1000)
+        logger.exception(
+            "devscontext_status failed",
+            extra={"error": str(e), "duration_ms": duration_ms},
+        )
+        return [
+            TextContent(
+                type="text",
+                text=f"Error checking status: {e}",
             )
         ]
 

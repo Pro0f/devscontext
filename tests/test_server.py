@@ -105,3 +105,43 @@ class TestDevsContextCore:
         # Second call with use_cache=False
         result = await core.get_task_context("BYPASS-CACHE", use_cache=False)
         assert result.cached is False
+
+    async def test_get_status_returns_formatted_string(self, core: DevsContextCore) -> None:
+        """Test that get_status returns a formatted status string."""
+        result = await core.get_status()
+
+        assert isinstance(result, str)
+        # Should contain version header
+        assert "DevsContext v" in result
+        # Should contain main sections
+        assert "Sources:" in result
+        assert "Synthesis:" in result
+        assert "Pre-processing:" in result
+        assert "Cache:" in result
+
+    async def test_get_status_shows_no_sources_when_disabled(self, core: DevsContextCore) -> None:
+        """Test that get_status shows no sources when all are disabled."""
+        result = await core.get_status()
+
+        # With no adapters enabled, should indicate no sources configured
+        assert "Sources:" in result
+
+    async def test_get_status_shows_cache_disabled(self, config: DevsContextConfig) -> None:
+        """Test that get_status shows cache as disabled when not enabled."""
+        # Create core without cache
+        config.cache.enabled = False
+        core = DevsContextCore(config)
+
+        result = await core.get_status()
+
+        assert "Cache:" in result
+        assert "Disabled" in result
+
+    async def test_get_status_demo_mode(self) -> None:
+        """Test that get_status works in demo mode."""
+        core = DevsContextCore(demo_mode=True)
+
+        result = await core.get_status()
+
+        assert "DevsContext v" in result
+        assert "Demo Mode" in result
