@@ -309,15 +309,18 @@ class TestGitHubAdapter:
             # PR 300 details (payments)
             is_pr_300 = "/repos/org/test-repo/pulls/300" in url
             if is_pr_300 and "/files" not in url and "/comments" not in url:
-                return httpx.Response(200, json={
-                    "number": 300,
-                    "title": "Update payments service",
-                    "user": {"login": "dev1"},
-                    "state": "closed",
-                    "html_url": "https://github.com/org/test-repo/pull/300",
-                    "created_at": "2024-03-15T10:00:00Z",
-                    "merged_at": "2024-03-16T10:00:00Z",
-                })
+                return httpx.Response(
+                    200,
+                    json={
+                        "number": 300,
+                        "title": "Update payments service",
+                        "user": {"login": "dev1"},
+                        "state": "closed",
+                        "html_url": "https://github.com/org/test-repo/pull/300",
+                        "created_at": "2024-03-15T10:00:00Z",
+                        "merged_at": "2024-03-16T10:00:00Z",
+                    },
+                )
 
             if "/repos/org/test-repo/pulls/300/files" in url:
                 return httpx.Response(200, json=[{"filename": "src/payments/processor.ts"}])
@@ -328,15 +331,18 @@ class TestGitHubAdapter:
             # PR 301 details (unrelated)
             is_pr_301 = "/repos/org/test-repo/pulls/301" in url
             if is_pr_301 and "/files" not in url and "/comments" not in url:
-                return httpx.Response(200, json={
-                    "number": 301,
-                    "title": "Update unrelated service",
-                    "user": {"login": "dev2"},
-                    "state": "closed",
-                    "html_url": "https://github.com/org/test-repo/pull/301",
-                    "created_at": "2024-03-15T10:00:00Z",
-                    "merged_at": "2024-03-16T10:00:00Z",
-                })
+                return httpx.Response(
+                    200,
+                    json={
+                        "number": 301,
+                        "title": "Update unrelated service",
+                        "user": {"login": "dev2"},
+                        "state": "closed",
+                        "html_url": "https://github.com/org/test-repo/pull/301",
+                        "created_at": "2024-03-15T10:00:00Z",
+                        "merged_at": "2024-03-16T10:00:00Z",
+                    },
+                )
 
             if "/repos/org/test-repo/pulls/301/files" in url:
                 return httpx.Response(200, json=[{"filename": "src/auth/login.ts"}])
@@ -359,9 +365,7 @@ class TestGitHubAdapter:
         assert len(result.data.recent_prs) == 1
         assert result.data.recent_prs[0].number == 300
 
-    async def test_search(
-        self, github_adapter: GitHubAdapter, httpx_mock: HTTPXMock
-    ) -> None:
+    async def test_search(self, github_adapter: GitHubAdapter, httpx_mock: HTTPXMock) -> None:
         """Test freeform search."""
 
         def github_api_callback(request: httpx.Request) -> httpx.Response:

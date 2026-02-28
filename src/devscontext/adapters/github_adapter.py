@@ -381,9 +381,7 @@ class GitHubAdapter(Adapter):
             merged_at = None
             if pr_data.get("merged_at"):
                 state = "merged"
-                merged_at = datetime.fromisoformat(
-                    pr_data["merged_at"].replace("Z", "+00:00")
-                )
+                merged_at = datetime.fromisoformat(pr_data["merged_at"].replace("Z", "+00:00"))
 
             return GitHubPR(
                 number=pr_data["number"],
@@ -391,9 +389,7 @@ class GitHubAdapter(Adapter):
                 author=pr_data["user"]["login"],
                 state=state,
                 url=pr_data["html_url"],
-                created_at=datetime.fromisoformat(
-                    pr_data["created_at"].replace("Z", "+00:00")
-                ),
+                created_at=datetime.fromisoformat(pr_data["created_at"].replace("Z", "+00:00")),
                 merged_at=merged_at,
                 changed_files=changed_files,
                 review_comments=review_comments,
@@ -430,7 +426,7 @@ class GitHubAdapter(Adapter):
             data = response.json()
 
             prs: list[GitHubPR] = []
-            for item in data.get("items", [])[:self._config.max_prs]:
+            for item in data.get("items", [])[: self._config.max_prs]:
                 pr = await self._fetch_pr_details(repo, item["number"])
                 if pr:
                     prs.append(pr)

@@ -172,7 +172,7 @@ class AnthropicProvider(LLMProvider):
         """Get or create the Anthropic client."""
         if self._client is None:
             try:
-                from anthropic import AsyncAnthropic  # type: ignore[import-not-found]
+                from anthropic import AsyncAnthropic
             except ImportError as e:
                 raise ImportError(
                     "anthropic package not installed. "
@@ -618,9 +618,7 @@ class LLMSynthesisPlugin(SynthesisPlugin):
 
         # GitHub context (PRs, issues, recent changes)
         if github_context and (
-            github_context.related_prs
-            or github_context.recent_prs
-            or github_context.related_issues
+            github_context.related_prs or github_context.recent_prs or github_context.related_issues
         ):
             sections.append(self._format_github_context(github_context))
 
